@@ -62,6 +62,8 @@ if ($action == 'create_tickets') {
     $status = $_POST['status'] ?? 'OPEN';
     $notes = $_POST['notes'] ?? '';
     $priority = $_POST['priority'] ?? 'medium';
+    $category = $_POST['category'] ?? '';
+    $dueDate = $_POST['due_date'] ?? '';
     // use the personnel ID stored in session for ownership (matches tickets.created_by FK)
     $createdBy = $_SESSION['personnel_id'] ?? $_SESSION['user_id'] ?? $_SESSION['id'] ?? 1;
 
@@ -70,6 +72,8 @@ if ($action == 'create_tickets') {
     $status = Sanitizer::normalize($status);
     $notes = Sanitizer::remarks($notes);
     $priority = Sanitizer::normalize($priority);
+    $category = Sanitizer::normalize($category);
+    $dueDate = !empty($dueDate) ? $dueDate : null;
 
     // Validate required fields
     if (empty($siteIds) || !Validator::subject($subject)) {
@@ -130,15 +134,17 @@ if ($action == 'create_tickets') {
                 $ticketNumber = sprintf('F-SMART-%d-%04d', $year, $counter);
 
                 // Insert ticket
-                $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, priority, notes, created_by, created_at, updated_at, solved_date) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NULL)");
+                $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, priority, category, notes, created_by, created_at, updated_at, solved_date, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NULL, ?)");
                 $insertStmt->execute([
                     $ticketNumber,
                     $siteId,
                     $subject,
                     $status,
                     $priority,
+                    $category ?: null,
                     $notes,
-                    $createdBy
+                    $createdBy,
+                    $dueDate
                 ]);
 
                 $ticketId = $pdo->lastInsertId();
@@ -407,6 +413,26 @@ requireAdmin();
                                 <option value="high">High</option>
                                 <option value="critical">Critical</option>
                             </select>
+                        </div>
+
+                        <!-- Category -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Category</label>
+                            <select id="category" name="category" class="form-select">
+                                <option value="">None</option>
+                                <option value="connectivity">Connectivity</option>
+                                <option value="hardware">Hardware</option>
+                                <option value="software">Software</option>
+                                <option value="power">Power</option>
+                                <option value="security">Security</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+
+                        <!-- Due Date -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Due Date</label>
+                            <input type="datetime-local" id="due_date" name="due_date" class="form-control">
                         </div>
 
                         <!-- Subject -->

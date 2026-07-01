@@ -30,7 +30,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $assignedTo = !empty($_POST['assigned_to']) ? intval($_POST['assigned_to']) : null;
 
         // Validate status
-        $validStatuses = ['IN_PROGRESS', 'RESOLVED'];
+        $validStatuses = ['IN_PROGRESS', 'RESOLVED', 'OPEN'];
         if (!Validator::inList($status, $validStatuses)) {
             $error = 'Invalid ticket status';
         } elseif (!Validator::string($notes, 0, 2000)) {
@@ -49,6 +49,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($status === 'CLOSED' || $status === 'RESOLVED') {
                     $solved_date = 'NOW()';
                     $duration_sql = ', duration = TIMESTAMPDIFF(MINUTE, created_at, NOW())';
+                } elseif ($status === 'OPEN' && $oldStatus === 'CLOSED') {
+                    // Reopening: clear solved_date and reset duration
+                    $solved_date = 'NULL';
+                    $duration_sql = ', duration = 0';
                 } else {
                     $solved_date = 'NULL';
                     $duration_sql = '';
@@ -146,6 +150,9 @@ try {
                         <div class="mb-3">
                             <label class="form-label fw-bold">Status</label>
                             <select name="status" class="form-select" onchange="updateSummary()">
+                                <?php if ($ticket['status'] === 'CLOSED'): ?>
+                                <option value="OPEN"<?php if($ticket['status']=='OPEN') echo ' selected'; ?>>OPEN (Reopen)</option>
+                                <?php endif; ?>
                                 <option value="IN_PROGRESS"<?php if($ticket['status']=='IN_PROGRESS') echo ' selected'; ?>>IN PROGRESS</option>
                                 <option value="RESOLVED"<?php if($ticket['status']=='RESOLVED') echo ' selected'; ?>>RESOLVED</option>
                             </select>

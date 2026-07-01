@@ -84,7 +84,7 @@ cagayansite_tickets/
 
 - **users**: id, personnel_id (FK), password (bcrypt), role (admin/user), status (active/inactive)
 - **personnels**: id, fullname, gmail (used as login username)
-- **tickets**: id, ticket_number, subject, notes, status, priority (low/medium/high/critical), site_id (FK), created_by (FK→personnels), duration (minutes), created_at, updated_at
+- **tickets**: id, ticket_number, subject, notes, status, priority (low/medium/high/critical), category, site_id (FK), created_by (FK→personnels), assigned_to (FK→personnels), duration (minutes), created_at, updated_at, solved_date, due_date
 - **sites**: id, site_name, isp, province, municipality, project_name, status
 - **system_logs**: id, user_id, personnel_id, action, entity_type, entity_id, details (JSON), description, ip_address, user_agent, severity, status, session_id, created_at
 - **notifications**: user_id, message, is_read, created_at

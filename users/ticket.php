@@ -143,10 +143,14 @@ if ($action == 'create_tickets') {
         $subject = $_POST['subject'] ?? '';
         $notes = $_POST['notes'] ?? '';
         $priority = $_POST['priority'] ?? 'medium';
+        $category = $_POST['category'] ?? '';
+        $dueDate = $_POST['due_date'] ?? '';
 
         $subject = Sanitizer::normalize($subject);
         $notes = Sanitizer::remarks($notes);
         $priority = Sanitizer::normalize($priority);
+        $category = Sanitizer::normalize($category);
+        $dueDate = !empty($dueDate) ? $dueDate : null;
 
         if (empty($siteIds) || !Validator::subject($subject)) {
             echo json_encode(['success' => false, 'message' => 'Invalid subject (5-255 characters required)']);
@@ -198,8 +202,8 @@ if ($action == 'create_tickets') {
             $counter = $getCounterStmt->fetchColumn();
             $ticketNumber = sprintf('F-SMART-%d-%04d', $year, $counter);
 
-            $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, priority, notes, created_by, created_at, updated_at, solved_date) VALUES (?, ?, ?, 'OPEN', ?, ?, ?, NOW(), NOW(), NULL)");
-            $insertStmt->execute([$ticketNumber, $siteId, $subject, $priority, $notes, $personnelId]);
+            $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, priority, category, notes, created_by, created_at, updated_at, solved_date, due_date) VALUES (?, ?, ?, 'OPEN', ?, ?, ?, ?, NOW(), NOW(), NULL, ?)");
+            $insertStmt->execute([$ticketNumber, $siteId, $subject, $priority, $category ?: null, $notes, $personnelId, $dueDate]);
 
             $ticketId = $pdo->lastInsertId();
             $history = new TicketHistory($pdo);
@@ -317,6 +321,24 @@ $activePage = 'tickets';
                                 <option value="high">High</option>
                                 <option value="critical">Critical</option>
                             </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Category</label>
+                            <select id="category" name="category" class="form-select">
+                                <option value="">None</option>
+                                <option value="connectivity">Connectivity</option>
+                                <option value="hardware">Hardware</option>
+                                <option value="software">Software</option>
+                                <option value="power">Power</option>
+                                <option value="security">Security</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Due Date</label>
+                            <input type="datetime-local" id="due_date" name="due_date" class="form-control">
                         </div>
 
                         <div class="mb-3">
