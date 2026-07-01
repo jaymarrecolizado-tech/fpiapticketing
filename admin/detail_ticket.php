@@ -14,6 +14,83 @@ if ($id <= 0) {
 
 // Handle AJAX comment actions
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
+
+// Handle file upload
+if ($action === 'upload_attachment') {
+    header('Content-Type: application/json');
+    $ticketId = intval($_POST['ticket_id'] ?? 0);
+    $userId = $_SESSION['user_id'];
+
+    if (!isset($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) {
+        echo json_encode(['success' => false, 'message' => 'Upload failed']);
+        exit;
+    }
+
+    $file = $_FILES['file'];
+    $maxSize = 10 * 1024 * 1024; // 10MB
+    if ($file['size'] > $maxSize) {
+        echo json_encode(['success' => false, 'message' => 'File too large (max 10MB)']);
+        exit;
+    }
+
+    $allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf', 'text/plain',
+                     'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                     'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+    $finfo = finfo_open(FILEINFO_MIME_TYPE);
+    $mimeType = finfo_file($finfo, $file['tmp_name']);
+    finfo_close($finfo);
+
+    if (!in_array($mimeType, $allowedTypes)) {
+        echo json_encode(['success' => false, 'message' => 'File type not allowed']);
+        exit;
+    }
+
+    $ext = pathinfo($file['name'], PATHINFO_EXTENSION);
+    $safeFilename = bin2hex(random_bytes(16)) . '.' . $ext;
+    $uploadDir = __DIR__ . '/../uploads/tickets';
+    if (!is_dir($uploadDir)) mkdir($uploadDir, 0755, true);
+
+    if (move_uploaded_file($file['tmp_name'], $uploadDir . '/' . $safeFilename)) {
+        $stmt = $pdo->prepare("INSERT INTO ticket_attachments (ticket_id, user_id, filename, original_name, file_size, mime_type, created_at) VALUES (?, ?, ?, ?, ?, ?, NOW())");
+        $stmt->execute([$ticketId, $userId, $safeFilename, $file['name'], $file['size'], $mimeType]);
+        echo json_encode(['success' => true, 'id' => $pdo->lastInsertId()]);
+    } else {
+        echo json_encode(['success' => false, 'message' => 'Failed to save file']);
+    }
+    exit;
+}
+
+if ($action === 'get_attachments') {
+    header('Content-Type: application/json');
+    $ticketId = intval($_GET['ticket_id'] ?? 0);
+    $stmt = $pdo->prepare("
+        SELECT ta.id, ta.filename, ta.original_name, ta.file_size, ta.mime_type, ta.created_at, p.fullname
+        FROM ticket_attachments ta
+        LEFT JOIN users u ON ta.user_id = u.id
+        LEFT JOIN personnels p ON u.personnel_id = p.id
+        WHERE ta.ticket_id = ?
+        ORDER BY ta.created_at DESC
+    ");
+    $stmt->execute([$ticketId]);
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    exit;
+}
+
+if ($action === 'delete_attachment') {
+    header('Content-Type: application/json');
+    $attachId = intval($_POST['attachment_id'] ?? 0);
+    $stmt = $pdo->prepare("SELECT filename FROM ticket_attachments WHERE id = ?");
+    $stmt->execute([$attachId]);
+    $file = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($file) {
+        $path = __DIR__ . '/../uploads/tickets/' . $file['filename'];
+        if (file_exists($path)) unlink($path);
+        $pdo->prepare("DELETE FROM ticket_attachments WHERE id = ?")->execute([$attachId]);
+    }
+    echo json_encode(['success' => true]);
+    exit;
+}
+
 if ($action === 'add_comment') {
     header('Content-Type: application/json');
     $csrf = $_POST['csrf_token'] ?? '';
@@ -133,6 +210,23 @@ function escapeHtml($s) {
                             <input type="text" id="commentInput" class="form-control" placeholder="Add a comment..." maxlength="2000">
                             <button class="btn btn-primary" onclick="addComment()"><i class="bi bi-send"></i></button>
                         </div>
+                        <?php endif; ?>
+                    </div>
+
+                    <hr>
+
+                    <!-- Attachments Section -->
+                    <div class="mb-4">
+                        <h6 class="text-muted fw-bold"><i class="bi bi-paperclip"></i> Attachments</h6>
+                        <div id="attachmentsContainer" class="mb-3">
+                            <div class="text-center text-muted py-2">Loading attachments...</div>
+                        </div>
+                        <?php if ($ticket['status'] !== 'CLOSED'): ?>
+                        <div class="input-group">
+                            <input type="file" id="fileInput" class="form-control" multiple>
+                            <button class="btn btn-outline-primary" onclick="uploadFiles()"><i class="bi bi-upload"></i> Upload</button>
+                        </div>
+                        <small class="text-muted">Max 10MB per file. Allowed: images, PDF, DOC, XLS</small>
                         <?php endif; ?>
                     </div>
 
@@ -275,6 +369,7 @@ function escapeHtml($s) {
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     loadComments();
+    loadAttachments();
 });
 
 function loadComments() {
@@ -332,6 +427,55 @@ function addComment() {
 function escapeHtml(s) {
     if (!s) return '';
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function loadAttachments() {
+    fetch('detail_ticket.php?action=get_attachments&ticket_id=<?php echo $id; ?>')
+    .then(res => res.json())
+    .then(files => {
+        const container = document.getElementById('attachmentsContainer');
+        if (!files.length) {
+            container.innerHTML = '<div class="text-center text-muted py-2 small">No attachments</div>';
+            return;
+        }
+        container.innerHTML = files.map(f => {
+            const icon = f.mime_type.startsWith('image/') ? 'bi-image' : 'bi-file-earmark';
+            const size = f.file_size > 1024*1024 ? (f.file_size/1024/1024).toFixed(1)+'MB' : (f.file_size/1024).toFixed(0)+'KB';
+            return `<div class="d-flex align-items-center justify-content-between p-2 mb-1" style="background:#f8f9fa;border-radius:4px;">
+                <div><i class="bi ${icon} me-2"></i><a href="../uploads/tickets/${escapeHtml(f.filename)}" target="_blank">${escapeHtml(f.original_name)}</a> <small class="text-muted">(${size})</small></div>
+                <button class="btn btn-sm btn-outline-danger" onclick="deleteAttachment(${f.id})"><i class="bi bi-trash"></i></button>
+            </div>`;
+        }).join('');
+    });
+}
+
+function uploadFiles() {
+    const input = document.getElementById('fileInput');
+    if (!input.files.length) return;
+    Array.from(input.files).forEach(file => {
+        const formData = new FormData();
+        formData.append('action', 'upload_attachment');
+        formData.append('ticket_id', '<?php echo $id; ?>');
+        formData.append('file', file);
+        formData.append('csrf_token', '<?php echo htmlspecialchars(generateCSRFToken()); ?>');
+        fetch('detail_ticket.php', { method: 'POST', body: formData })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) loadAttachments();
+            else alert(data.message || 'Upload failed');
+        });
+    });
+    input.value = '';
+}
+
+function deleteAttachment(id) {
+    if (!confirm('Delete this attachment?')) return;
+    const formData = new FormData();
+    formData.append('action', 'delete_attachment');
+    formData.append('attachment_id', id);
+    fetch('detail_ticket.php', { method: 'POST', body: formData })
+    .then(res => res.json())
+    .then(data => { if (data.success) loadAttachments(); });
 }
 </script>
 
