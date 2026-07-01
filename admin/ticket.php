@@ -61,6 +61,7 @@ if ($action == 'create_tickets') {
         $subject = $_POST['subject'] ?? '';
     $status = $_POST['status'] ?? 'OPEN';
     $notes = $_POST['notes'] ?? '';
+    $priority = $_POST['priority'] ?? 'medium';
     // use the personnel ID stored in session for ownership (matches tickets.created_by FK)
     $createdBy = $_SESSION['personnel_id'] ?? $_SESSION['user_id'] ?? $_SESSION['id'] ?? 1;
 
@@ -68,6 +69,7 @@ if ($action == 'create_tickets') {
     $subject = Sanitizer::normalize($subject);
     $status = Sanitizer::normalize($status);
     $notes = Sanitizer::remarks($notes);
+    $priority = Sanitizer::normalize($priority);
 
     // Validate required fields
     if (empty($siteIds) || !Validator::subject($subject)) {
@@ -79,6 +81,12 @@ if ($action == 'create_tickets') {
     if (!empty($notes) && !Validator::remarks($notes)) {
         echo json_encode(['success' => false, 'message' => 'Notes exceed maximum length (2000 characters)']);
         exit;
+    }
+
+    // Validate priority
+    $validPriorities = ['low', 'medium', 'high', 'critical'];
+    if (!Validator::inList($priority, $validPriorities)) {
+        $priority = 'medium';
     }
 
     // Validate status
@@ -122,12 +130,13 @@ if ($action == 'create_tickets') {
                 $ticketNumber = sprintf('F-SMART-%d-%04d', $year, $counter);
 
                 // Insert ticket
-                $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, notes, created_by, created_at, updated_at, solved_date) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), NULL)");
+                $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, priority, notes, created_by, created_at, updated_at, solved_date) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NULL)");
                 $insertStmt->execute([
                     $ticketNumber,
                     $siteId,
                     $subject,
                     $status,
+                    $priority,
                     $notes,
                     $createdBy
                 ]);
@@ -388,7 +397,18 @@ requireAdmin();
                         </div>
 
                         <hr>
-                        
+
+                        <!-- Priority -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Priority</label>
+                            <select id="priority" name="priority" class="form-select">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                                <option value="critical">Critical</option>
+                            </select>
+                        </div>
+
                         <!-- Subject -->
                         <div class="mb-3">
                             <label class="form-label fw-bold">Subject <span class="text-danger">*</span></label>

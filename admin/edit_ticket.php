@@ -27,6 +27,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // handle update
         $status = Sanitizer::normalize($_POST['status'] ?? 'OPEN');
         $notes = Sanitizer::normalize($_POST['notes'] ?? '');
+        $assignedTo = !empty($_POST['assigned_to']) ? intval($_POST['assigned_to']) : null;
 
         // Validate status
         $validStatuses = ['IN_PROGRESS', 'RESOLVED'];
@@ -37,10 +38,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             try {
                 // Get current ticket status before update
-                $currentStmt = $pdo->prepare("SELECT status, ticket_number FROM tickets WHERE id = ?");
+                $currentStmt = $pdo->prepare("SELECT status, ticket_number, assigned_to FROM tickets WHERE id = ?");
                 $currentStmt->execute([$id]);
                 $currentTicket = $currentStmt->fetch(PDO::FETCH_ASSOC);
                 $oldStatus = $currentTicket['status'];
+                $oldAssigned = $currentTicket['assigned_to'];
                 $ticketNumber = $currentTicket['ticket_number'];
 
                 // Set solved_date and duration based on status
@@ -51,9 +53,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $solved_date = 'NULL';
                     $duration_sql = '';
                 }
-                $updateSql = "UPDATE tickets SET status = ?, notes = ?, solved_date = $solved_date, updated_at = NOW()$duration_sql WHERE id = ?";
+                $updateSql = "UPDATE tickets SET status = ?, notes = ?, assigned_to = ?, solved_date = $solved_date, updated_at = NOW()$duration_sql WHERE id = ?";
                 $stmt2 = $pdo->prepare($updateSql);
-                $stmt2->execute([$status, $notes, $id]);
+                $stmt2->execute([$status, $notes, $assignedTo, $id]);
                 
                 // Log ticket history
                 $history = new TicketHistory($pdo);
@@ -146,6 +148,20 @@ try {
                             <select name="status" class="form-select" onchange="updateSummary()">
                                 <option value="IN_PROGRESS"<?php if($ticket['status']=='IN_PROGRESS') echo ' selected'; ?>>IN PROGRESS</option>
                                 <option value="RESOLVED"<?php if($ticket['status']=='RESOLVED') echo ' selected'; ?>>RESOLVED</option>
+                            </select>
+                        </div>
+
+                        <!-- Assign To -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Assign To</label>
+                            <select name="assigned_to" class="form-select">
+                                <option value="">Unassigned</option>
+                                <?php
+                                $personnelList = $pdo->query("SELECT id, fullname FROM personnels WHERE status = 'active' ORDER BY fullname")->fetchAll(PDO::FETCH_ASSOC);
+                                foreach ($personnelList as $p):
+                                ?>
+                                <option value="<?php echo $p['id']; ?>"<?php if(($ticket['assigned_to'] ?? null) == $p['id']) echo ' selected'; ?>><?php echo htmlspecialchars($p['fullname']); ?></option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 

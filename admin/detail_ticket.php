@@ -50,10 +50,11 @@ if ($action === 'get_comments') {
 }
 
 try {
-    $stmt = $pdo->prepare("SELECT t.*, s.site_name, p.fullname AS created_by_name
+    $stmt = $pdo->prepare("SELECT t.*, s.site_name, p.fullname AS created_by_name, ap.fullname AS assigned_to_name
                            FROM tickets t
                            LEFT JOIN sites s ON t.site_id = s.id
                            LEFT JOIN personnels p ON t.created_by = p.id
+                           LEFT JOIN personnels ap ON t.assigned_to = ap.id
                            WHERE t.id = ?");
     $stmt->execute([$id]);
     $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -219,6 +220,14 @@ function escapeHtml($s) {
                     <div class="mb-3">
                         <h6 class="text-muted small">Created By</h6>
                         <small><?php echo escapeHtml($ticket['created_by_name'] ?? 'Unknown'); ?></small>
+                    </div>
+
+                    <hr>
+
+                    <!-- Assigned To -->
+                    <div class="mb-3">
+                        <h6 class="text-muted small">Assigned To</h6>
+                        <small><?php echo escapeHtml($ticket['assigned_to_name'] ?? 'Unassigned'); ?></small>
                     </div>
 
                     <hr>

@@ -56,10 +56,11 @@ if ($action === 'get_comments') {
 }
 
 try {
-    $stmt = $pdo->prepare("SELECT t.*, s.site_name, s.isp, s.province, s.municipality, p.fullname AS created_by_name
+    $stmt = $pdo->prepare("SELECT t.*, s.site_name, s.isp, s.province, s.municipality, p.fullname AS created_by_name, ap.fullname AS assigned_to_name
                            FROM tickets t
                            LEFT JOIN sites s ON t.site_id = s.id
                            LEFT JOIN personnels p ON t.created_by = p.id
+                           LEFT JOIN personnels ap ON t.assigned_to = ap.id
                            WHERE t.id = ? AND t.created_by = ?");
     $stmt->execute([$id, $personnelId]);
     $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
