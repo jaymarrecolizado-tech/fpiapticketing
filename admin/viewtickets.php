@@ -92,7 +92,7 @@ if ($action === 'get_tickets') {
   $sortOrder = strtoupper(trim($_POST['sort_order'] ?? 'DESC'));
 
   // Validate sort parameters
-  $validSortColumns = ['ticket_number', 'site_name', 'isp', 'subject', 'status', 'created_at', 'created_by_name', 'duration'];
+  $validSortColumns = ['ticket_number', 'site_name', 'isp', 'subject', 'status', 'priority', 'created_at', 'created_by_name', 'duration'];
   $validSortOrders = ['ASC', 'DESC'];
 
   if (!in_array($sortBy, $validSortColumns)) {
@@ -318,179 +318,8 @@ if ($action === 'update_ticket') {
 }
 
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
-
-  <style>
-    .sortable {
-      cursor: pointer;
-      user-select: none;
-      position: relative;
-    }
-    .sort-indicator {
-      display: inline-block;
-      margin-left: 5px;
-      opacity: 0.3;
-      transition: opacity 0.2s;
-    }
-    .sortable.sort-asc .sort-indicator:before {
-      content: '↑';
-      opacity: 1;
-    }
-    .sortable.sort-desc .sort-indicator:before {
-      content: '↓';
-      opacity: 1;
-    }
-    .sortable.sort-none .sort-indicator:before {
-      content: '↕';
-      opacity: 0.5;
-    }
-
-    /* Dropdown Menu Enhancement */
-    .dropdown-menu {
-      border: 1px solid #e0e7ff;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-      border-radius: 0.5rem;
-    }
-
-    .form-check-label {
-      padding: 0.25rem 0;
-      min-height: 44px; /* iOS touch target */
-      display: flex;
-      align-items: center;
-    }
-
-    /* Badge Enhancement */
-    .badge {
-      font-size: 0.75rem;
-      padding: 0.35em 0.65em;
-    }
-  </style>
-
-  <title>FPIAP-Service Management and Response Ticketing System</title>
-</head>
-<body class="d-flex flex-column min-vh-100" style="background-color: #f8f9fa;">
-
-<nav class="navbar sticky-top navbar-expand-lg navbar-light shadow-sm" style="background-color: #0ef;">
-  <div class="container-fluid">
-
-    <a class="navbar-brand d-flex align-items-center" href="dashboard.php">
-      <img src="../assets/freewifilogo.png" alt="Logo" width="100" height="100" class="me-2">
-      <img src="../assets/FPIAP-SMARTs.png" alt="Logo" width="100" height="100" class="me-2">
-      <div class="d-flex flex-column ms-0">
-        <span class="fw-bold">FPIAP-SMARTs</span>
-        <span class="fw-bold small align-self-center">ADMIN PANEL</span>
-      </div>
-    </a>
-
-  <hr class="mx-0 my-2 opacity-25">
-
-  <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-    <span class="navbar-toggler-icon"></span>
-  </button>
-
-  <!-- Navigation Links -->
-  <div class="collapse navbar-collapse" id="mainNavbar">
-    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-
-    <li class="nav-item">
-      <a class="nav-link" href="dashboard.php">Dashboard</a>
-    </li>
-
-    <li class="nav-item dropdown">
-      <a class="nav-link active dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Tickets
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="viewtickets.php">View Tickets</a></li>
-      <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li> 
-      </ul>
-    </li>
-
-
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Sites
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-      <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li> 
-      </ul>
-    </li>
-
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Reports
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="ticket_report.php">Ticket Report</a></li>
-      <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
-      </ul>
-    </li>
-
-        
-
-    <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            Setting
-        </a>
-        <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-        <li><a class="dropdown-item" href="personnel.php">Personnels</a></li>
-        <li><a class="dropdown-item" href="user.php">User's Management</a></li>
-        <li><a class="dropdown-item" href="systemlog.php">System Log</a></li>
-        <li><a class="dropdown-item" href="backup.php">Backup Management</a></li>
-        <li><a class="dropdown-item" href="data_export.php">Data Export</a></li>
-        <li><a class="dropdown-item" href="history.php">History</a></li>
-        </ul>
-    </li>
-        
-    </ul>
-
-    <!-- Right Icons -->
-    <ul class="navbar-nav ms-auto align-items-center">
-
-    
-
-    <!-- Notification Bell -->
-    <li class="nav-item dropdown me-3">
-          <a id="notificationBell" class="nav-link position-relative dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-bell fs-5"></i>
-            <span id="notificationBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger visually-hidden">0</span>
-          </a>
-          <ul id="notificationDropdown" class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell">
-            <li class="dropdown-item text-center text-muted small">Loading...</li>
-          </ul>
-    </li>
-
-    <!-- Account Name Display -->
-    <li class="nav-item d-flex align-items-center me-3">
-      <div class="d-flex flex-column text-end">
-        <span class="fw-semibold text-dark small"><?php echo htmlspecialchars($_SESSION['username'] ?? 'Unknown User'); ?></span>
-      </div>
-    </li>
-
-    <!-- Profile Dropdown -->
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown">
-      <i class="bi bi-person-circle fs-4 me-1"></i>
-      </a>
-      <ul class="dropdown-menu dropdown-menu-end">
-      <li><a class="dropdown-item" href="account.php">My Account</a></li>
-      <li><hr class="dropdown-divider"></li>
-      <li><a class="dropdown-item text-danger" href="../logout.php">Logout</a></li>
-      </ul>
-    </li>
-
-    </ul>
-  </div>
-  </div>
-</nav>
+<?php $activePage = 'tickets'; ?>
+<?php require __DIR__ . '/../includes/admin_header.php'; ?>
 
 
 <div class="container-fluid mt-3">
@@ -857,6 +686,7 @@ if ($action === 'update_ticket') {
               <th class="sortable" data-sort="isp">ISP <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="subject">Subject <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="status">Status <span class="sort-indicator"></span></th>
+              <th class="sortable" data-sort="priority">Priority <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="created_at">Created <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="created_by_name">Created By <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="duration">Duration (minutes) <span class="sort-indicator"></span></th>
@@ -907,16 +737,8 @@ if ($action === 'update_ticket') {
   // filter state for multi-select components
   const filtersState = { isps: [], statuses: [], sites: [], createdBy: [], projects: [], provinces: [], municipalities: [] };
 
-  // Initialize notifications on page load
+  // Initialize on page load
   document.addEventListener('DOMContentLoaded', function() {
-      fetchNotifications();
-      setInterval(fetchNotifications, 60000);
-
-      const bellToggle = document.getElementById('notificationBell');
-      if (bellToggle) {
-          bellToggle.addEventListener('show.bs.dropdown', fetchNotifications);
-      }
-
       initMultiSelect();
 
       // initial load
@@ -1709,15 +1531,17 @@ if ($action === 'update_ticket') {
 
   function renderTable(rows){
     const tb = document.getElementById('ticketsTable');
-    if(!rows.length){ tb.innerHTML = '<tr><td colspan="9" class="text-center py-4 text-muted"><i class="bi bi-inbox"></i> No tickets found</td></tr>'; return; }
+    if(!rows.length){ tb.innerHTML = '<tr><td colspan="10" class="text-center py-4 text-muted"><i class="bi bi-inbox"></i> No tickets found</td></tr>'; return; }
     tb.innerHTML = rows.map(r=>{
       const statusBg = statusClass(r.status);
+      const priorityBg = priorityClass(r.priority);
       return `<tr class="align-middle" data-ticket-id="${r.id}">
         <td><a href="detail_ticket.php?id=${r.id}" class="text-primary fw-bold text-decoration-none">${escapeHtml(r.ticket_number)}</a></td>
         <td>${escapeHtml(r.site_name || 'N/A')}</td>
         <td>${escapeHtml(r.isp || 'N/A')}</td>
         <td>${escapeHtml(r.subject)}</td>
         <td><span class="badge ${statusBg}">${escapeHtml(r.status)}</span></td>
+        <td><span class="badge ${priorityBg}">${escapeHtml(r.priority || 'medium')}</span></td>
         <td><small class="text-muted">${escapeHtml(r.created_at_fmt)}</small></td>
         <td><small class="text-muted">${escapeHtml(r.created_by_name || 'N/A')}</small></td>
         <td class="text-center"><span class="badge bg-light text-dark">${formatDuration(r.duration_minutes)}</span></td>
@@ -1736,6 +1560,16 @@ if ($action === 'update_ticket') {
     if(s==='IN_PROGRESS') return 'bg-warning text-dark';
     if(s==='RESOLVED') return 'bg-info';
     if(s==='CLOSED') return 'bg-success';
+    return 'bg-secondary';
+  }
+
+  function priorityClass(p){
+    if(!p) return 'bg-secondary';
+    p = p.toLowerCase();
+    if(p==='critical') return 'bg-danger';
+    if(p==='high') return 'bg-warning text-dark';
+    if(p==='medium') return 'bg-info';
+    if(p==='low') return 'bg-secondary';
     return 'bg-secondary';
   }
 
@@ -1785,57 +1619,5 @@ if ($action === 'update_ticket') {
     });
   });
 
-  // Fetch notifications from notification.php
-  async function fetchNotifications() {
-      const dropdown = document.getElementById('notificationDropdown');
-      const badge = document.getElementById('notificationBadge');
-      if (!dropdown) return;
-      try {
-          const resp = await fetch('notification.php', { method: 'GET', cache: 'no-cache' });
-          if (!resp.ok) throw new Error('Network response not ok');
-          const html = await resp.text();
-          
-          if (html && html.trim().length > 0) {
-              dropdown.innerHTML = html;
-          } else {
-              dropdown.innerHTML = '<li class="dropdown-item text-center text-muted small">No notifications</li>';
-          }
-
-          // Attach click handlers to notification items
-          dropdown.querySelectorAll('.notification-item').forEach(item => {
-              item.addEventListener('click', function(e) {
-                  const notificationId = this.getAttribute('data-notification-id');
-                  if (notificationId) {
-                      fetch('../notif/api.php', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                          body: 'action=mark_read&notification_id=' + notificationId
-                      }).catch(err => console.error('Failed to mark notification as read:', err));
-                      this.classList.remove('unread');
-                  }
-              });
-          });
-
-          const unread = dropdown.querySelectorAll('.notification-item.unread, li[data-unread="1"]').length;
-          if (unread > 0) {
-              badge.textContent = String(unread);
-              badge.classList.remove('visually-hidden');
-          } else {
-              badge.classList.add('visually-hidden');
-          }
-      } catch (err) {
-          dropdown.innerHTML = '<li class="dropdown-item text-danger small">Error loading notifications</li>';
-          if (badge) badge.classList.add('visually-hidden');
-          console.error('Failed to load notifications:', err);
-      }
-  }
   </script>
-  <footer class="bg-dark text-light text-center py-3 mt-auto">
-    <div class="container">
-    <small>
-      <?php echo date('Y'); ?> &copy; FREE PUBLIC INTERNET ACCESS PROGRAM - SERVICE MANAGEMENT AND RESPONSE TICKETING SYSTEM (FPIAP-SMARTs). All Rights Reserved.
-    </small>
-    </div>
-  </footer>
-</body>
-</html>
+<?php require __DIR__ . '/../includes/footer.php'; ?>

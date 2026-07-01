@@ -1,167 +1,327 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php
+require '../config/db.php';
+require '../config/auth.php';
+require '../lib/Sanitizer.php';
+require '../lib/duration.php';
+require '../notif/notification.php';
 
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+requireLogin();
 
-  <title>FPIAP-Service Management and Response Ticketing System</title>
-</head>
-<body class="d-flex flex-column min-vh-100">
+// Get current user's personnel_id
+$stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
+$stmt->execute([$_SESSION['user_id']]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+if (!$user) {
+    header('Location: ../index.php');
+    exit;
+}
+$personnelId = $user['personnel_id'];
 
-<nav class="navbar sticky-top navbar-expand-lg navbar-light shadow-sm" style="background-color: #0ef;">
-  <div class="container-fluid">
+$action = $_POST['action'] ?? '';
 
-    <a class="navbar-brand d-flex align-items-center" href="dashboard.php">
-      <img src="../assets/freewifilogo.png" alt="Logo" width="100" height="100" class="me-2">
-      <img src="../assets/FPIAP-SMARTs.png" alt="Logo" width="100" height="100" class="me-2">
-      
-      <div class="d-flex flex-column ms-0">
-        <span class="fw-bold">FPIAP-SMARTs</span>
-      </div>
-    </a>
+// AJAX: Get tickets
+if ($action === 'get_tickets') {
+    header('Content-Type: application/json');
+    $page = max(1, intval($_POST['page'] ?? 1));
+    $perPage = intval($_POST['per_page'] ?? 25);
+    $search = trim($_POST['search'] ?? '');
+    $statusArray = $_POST['status'] ?? [];
+    if (!is_array($statusArray)) $statusArray = $statusArray !== '' ? [$statusArray] : [];
+    $sortBy = trim($_POST['sort_by'] ?? 'created_at');
+    $sortOrder = strtoupper(trim($_POST['sort_order'] ?? 'DESC'));
 
-  <hr class="mx-0 my-2 opacity-25">
+    $validSortColumns = ['ticket_number', 'site_name', 'subject', 'status', 'priority', 'created_at', 'duration'];
+    if (!in_array($sortBy, $validSortColumns)) $sortBy = 'created_at';
+    if (!in_array($sortOrder, ['ASC', 'DESC'])) $sortOrder = 'DESC';
 
-  <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-    <span class="navbar-toggler-icon"></span>
-  </button>
+    try {
+        $conditions = ["t.created_by = ?"];
+        $params = [$personnelId];
 
-  <!-- Navigation Links -->
-  <div class="collapse navbar-collapse" id="mainNavbar">
-    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+        if (!empty($search)) {
+            $conditions[] = "(t.ticket_number LIKE ? OR t.subject LIKE ? OR s.site_name LIKE ?)";
+            $searchTerm = '%' . $search . '%';
+            $params[] = $searchTerm;
+            $params[] = $searchTerm;
+            $params[] = $searchTerm;
+        }
+        if (!empty($statusArray)) {
+            $placeholders = implode(',', array_fill(0, count($statusArray), '?'));
+            $conditions[] = "t.status IN ($placeholders)";
+            $params = array_merge($params, $statusArray);
+        }
 
-    <li class="nav-item">
-      <a class="nav-link" href="dashboard.php">Dashboard</a>
-    </li>
+        $where = implode(" AND ", $conditions);
 
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Tickets
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="view_tickets.php">View Tickets</a></li>
-      <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li> 
-      </ul>
-    </li>
+        $countStmt = $pdo->prepare("SELECT COUNT(*) FROM tickets t LEFT JOIN sites s ON t.site_id = s.id WHERE $where");
+        $countStmt->execute($params);
+        $total = $countStmt->fetchColumn();
 
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Sites
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-      <li><a class="dropdown-item" href="#">Sites Report</a></li> 
-      </ul>
-    </li>
+        $sql = "SELECT t.id, t.ticket_number, t.subject, t.status, t.priority, t.notes, t.created_at, t.duration, t.solved_date,
+                       s.site_name, s.isp, s.province, s.municipality
+                FROM tickets t
+                LEFT JOIN sites s ON t.site_id = s.id
+                WHERE $where
+                ORDER BY t.$sortBy $sortOrder
+                LIMIT $perPage OFFSET " . ($page - 1) * $perPage;
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $tickets = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    <li class="nav-item">
-      <a class="nav-link" href="#">Reports</a>
-    </li>
-               
-    </ul>
+        echo json_encode([
+            'tickets' => $tickets,
+            'total' => $total,
+            'page' => $page,
+            'pages' => ceil($total / $perPage)
+        ]);
+    } catch (PDOException $e) {
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
 
-    <!-- Right Icons -->
-    <ul class="navbar-nav ms-auto align-items-center">
+// AJAX: Get filter options
+if ($action === 'get_filters') {
+    header('Content-Type: application/json');
+    try {
+        $statuses = $pdo->prepare("SELECT DISTINCT status FROM tickets WHERE created_by = ? AND status IS NOT NULL ORDER BY status");
+        $statuses->execute([$personnelId]);
+        $statuses = $statuses->fetchAll(PDO::FETCH_COLUMN);
 
-    <!-- Notification Bell -->
-    <li class="nav-item dropdown me-3">
-          <a id="notificationBell" class="nav-link position-relative dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-bell fs-5"></i>
-            <span id="notificationBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger visually-hidden">0</span>
-          </a>
-          <ul id="notificationDropdown" class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell">
-            <li class="dropdown-item text-center text-muted small">Loading...</li>
-          </ul>
-    </li>
+        echo json_encode(['statuses' => $statuses]);
+    } catch (PDOException $e) {
+        echo json_encode(['error' => $e->getMessage()]);
+    }
+    exit;
+}
 
-    <!-- Profile Dropdown -->
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown">
-      <i class="bi bi-person-circle fs-4 me-1"></i>
-      </a>
-      <ul class="dropdown-menu dropdown-menu-end">
-      <li><a class="dropdown-item" href="#">My Account</a></li>
-      <li><hr class="dropdown-divider"></li>
-      <li><a class="dropdown-item text-danger" href="../logout.php">Logout</a></li>
-      </ul>
-    </li>
+$activePage = 'tickets';
+?>
+<?php require __DIR__ . '/../includes/user_header.php'; ?>
 
-    </ul>
-  </div>
-  </div>
-</nav>
+<div class="container-fluid mt-4">
+    <div id="alertContainer"></div>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3>MY TICKETS</h3>
+    </div>
 
+    <div class="mb-3">
+        <input type="text" id="searchInput" class="form-control form-control-lg" placeholder="Search by ticket number, subject, or site name...">
+    </div>
 
+    <!-- Filter Bar -->
+    <div class="filter-bar bg-light p-3 mb-3 border rounded">
+        <div class="row g-2">
+            <div class="col-lg-3 col-md-4 col-sm-6">
+                <div class="dropdown">
+                    <button class="btn btn-outline-secondary w-100" type="button" onclick="toggleFilter('status')">
+                        Status <span class="badge bg-primary" id="status_count">0</span>
+                    </button>
+                    <div id="filterMenu_status" class="dropdown-menu p-2 w-100" style="max-height: 200px; overflow-y: auto; display: none;">
+                        <div id="statusOptions"></div>
+                        <div class="mt-2 text-end"><button class="btn btn-sm btn-link" onclick="clearFilter('status')">Clear</button></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
+    <div class="table-responsive">
+        <table class="table table-hover" id="ticketsTable">
+            <thead class="table-light">
+                <tr>
+                    <th style="cursor:pointer;" onclick="sortTable('ticket_number')">Ticket # <i class="bi bi-arrow-down-up"></i></th>
+                    <th style="cursor:pointer;" onclick="sortTable('subject')">Subject <i class="bi bi-arrow-down-up"></i></th>
+                    <th style="cursor:pointer;" onclick="sortTable('site_name')">Site <i class="bi bi-arrow-down-up"></i></th>
+                    <th>ISP</th>
+                    <th>Location</th>
+                    <th style="cursor:pointer;" onclick="sortTable('status')">Status <i class="bi bi-arrow-down-up"></i></th>
+                    <th style="cursor:pointer;" onclick="sortTable('priority')">Priority <i class="bi bi-arrow-down-up"></i></th>
+                    <th style="cursor:pointer;" onclick="sortTable('duration')">Duration <i class="bi bi-arrow-down-up"></i></th>
+                    <th style="cursor:pointer;" onclick="sortTable('created_at')">Created <i class="bi bi-arrow-down-up"></i></th>
+                </tr>
+            </thead>
+            <tbody id="ticketsBody">
+                <tr><td colspan="9" class="text-center text-muted py-4">Loading...</td></tr>
+            </tbody>
+        </table>
+    </div>
 
-<footer class="bg-dark text-light text-center py-3 mt-auto">
-  <div class="container">
-  <small>
-    <?php echo date('Y'); ?> &copy; FREE PUBLIC INTERNET ACCESS PROGRAM - SERVICE MANAGEMENT AND RESPONSE TICKETING SYSTEM (FPIAP-SMARTs). All Rights Reserved.
-  </small>
-  </div>
-</footer>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <!-- Pagination -->
+    <div class="d-flex justify-content-between align-items-center mt-3">
+        <div class="text-muted small" id="paginationInfo">Showing 0 of 0 tickets</div>
+        <nav>
+            <ul class="pagination mb-0" id="pagination"></ul>
+        </nav>
+    </div>
+</div>
+
 <script>
-    // Initialize on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        fetchNotifications();
-        setInterval(fetchNotifications, 60000);
+let currentPage = 1;
+let currentSort = 'created_at';
+let currentOrder = 'DESC';
+let currentFilters = { status: [] };
 
-        const bellToggle = document.getElementById('notificationBell');
-        if (bellToggle) {
-            bellToggle.addEventListener('show.bs.dropdown', fetchNotifications);
+document.addEventListener('DOMContentLoaded', function() {
+    loadFilters();
+    loadTickets();
+
+    document.getElementById('searchInput').addEventListener('keyup', function(e) {
+        if (e.key === 'Enter') { currentPage = 1; loadTickets(); }
+    });
+});
+
+function loadFilters() {
+    fetch('view_tickets.php', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'action=get_filters'
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.statuses) {
+            const container = document.getElementById('statusOptions');
+            data.statuses.forEach(s => {
+                const checked = currentFilters.status.includes(s) ? 'checked' : '';
+                container.innerHTML += `<div class="form-check"><input class="form-check-input filter-check" type="checkbox" value="${s}" data-filter="status" ${checked}><label class="form-check-label">${s}</label></div>`;
+            });
         }
     });
+}
 
-    // Fetch notifications from notification.php
-    async function fetchNotifications() {
-        const dropdown = document.getElementById('notificationDropdown');
-        const badge = document.getElementById('notificationBadge');
-        if (!dropdown) return;
-        try {
-            const resp = await fetch('notification.php', { method: 'GET', cache: 'no-cache' });
-            if (!resp.ok) throw new Error('Network response not ok');
-            const html = await resp.text();
-            
-            if (html && html.trim().length > 0) {
-                dropdown.innerHTML = html;
-            } else {
-                dropdown.innerHTML = '<li class="dropdown-item text-center text-muted small">No notifications</li>';
-            }
+function loadTickets() {
+    const search = document.getElementById('searchInput').value;
+    const formData = new URLSearchParams();
+    formData.append('action', 'get_tickets');
+    formData.append('page', currentPage);
+    formData.append('per_page', 25);
+    formData.append('search', search);
+    formData.append('sort_by', currentSort);
+    formData.append('sort_order', currentOrder);
+    currentFilters.status.forEach(s => formData.append('status[]', s));
 
-            // Attach click handlers to notification items
-            dropdown.querySelectorAll('.notification-item').forEach(item => {
-                item.addEventListener('click', function(e) {
-                    const notificationId = this.getAttribute('data-notification-id');
-                    if (notificationId) {
-                        fetch('../notif/api.php', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: 'action=mark_read&notification_id=' + notificationId
-                        }).catch(err => console.error('Failed to mark notification as read:', err));
-                        this.classList.remove('unread');
-                    }
-                });
-            });
+    fetch('view_tickets.php', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: formData.toString()
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.error) { console.error(data.error); return; }
+        renderTickets(data.tickets);
+        renderPagination(data.page, data.pages, data.total);
+    });
+}
 
-            const unread = dropdown.querySelectorAll('.notification-item.unread, li[data-unread="1"]').length;
-            if (unread > 0) {
-                badge.textContent = String(unread);
-                badge.classList.remove('visually-hidden');
-            } else {
-                badge.classList.add('visually-hidden');
-            }
-        } catch (err) {
-            dropdown.innerHTML = '<li class="dropdown-item text-danger small">Error loading notifications</li>';
-            if (badge) badge.classList.add('visually-hidden');
-            console.error('Failed to load notifications:', err);
-        }
+function renderTickets(tickets) {
+    const tbody = document.getElementById('ticketsBody');
+    if (!tickets || tickets.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted py-4">No tickets found</td></tr>';
+        return;
     }
+    let html = '';
+    tickets.forEach(t => {
+        const statusBadge = getStatusBadge(t.status);
+        const priorityBadge = getPriorityBadge(t.priority);
+        const duration = formatDuration(calculateDurationMinutes(t.created_at, t.duration, t.status));
+        const location = [t.province, t.municipality].filter(Boolean).join(', ');
+        html += `<tr>
+            <td><a href="detail_ticket.php?id=${t.id}">${t.ticket_number}</a></td>
+            <td>${escapeHtml(t.subject)}</td>
+            <td>${escapeHtml(t.site_name || 'N/A')}</td>
+            <td>${escapeHtml(t.isp || 'N/A')}</td>
+            <td>${escapeHtml(location || 'N/A')}</td>
+            <td>${statusBadge}</td>
+            <td>${priorityBadge}</td>
+            <td>${duration}</td>
+            <td>${new Date(t.created_at).toLocaleDateString()}</td>
+        </tr>`;
+    });
+    tbody.innerHTML = html;
+}
+
+function getStatusBadge(status) {
+    const classes = { OPEN: 'bg-danger', IN_PROGRESS: 'bg-warning text-dark', RESOLVED: 'bg-info', CLOSED: 'bg-success' };
+    return `<span class="badge ${classes[status] || 'bg-secondary'}">${status}</span>`;
+}
+
+function getPriorityBadge(priority) {
+    const classes = { critical: 'bg-danger', high: 'bg-warning text-dark', medium: 'bg-info', low: 'bg-secondary' };
+    return `<span class="badge ${classes[priority] || 'bg-secondary'}">${(priority || 'medium').charAt(0).toUpperCase() + (priority || 'medium').slice(1)}</span>`;
+}
+
+function calculateDurationMinutes(created, stored, status) {
+    if (status === 'CLOSED' || status === 'RESOLVED') return parseInt(stored) || 0;
+    const createdDate = new Date(created);
+    const now = new Date();
+    return Math.floor((now - createdDate) / 60000);
+}
+
+function formatDuration(minutes) {
+    minutes = Math.max(0, minutes);
+    const days = Math.floor(minutes / 1440);
+    const hours = Math.floor((minutes % 1440) / 60);
+    const mins = minutes % 60;
+    const parts = [];
+    if (days > 0) parts.push(days + 'd');
+    if (hours > 0) parts.push(hours + 'h');
+    if (mins > 0 || parts.length === 0) parts.push(mins + 'm');
+    return parts.join(' ');
+}
+
+function escapeHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function renderPagination(page, pages, total) {
+    document.getElementById('paginationInfo').innerHTML = `Showing ${(page-1)*25+1}-${Math.min(page*25, total)} of ${total} tickets`;
+    const ul = document.getElementById('pagination');
+    let html = '';
+    if (page > 1) html += `<li class="page-item"><a class="page-link" href="#" onclick="goToPage(${page-1})">Prev</a></li>`;
+    for (let i = Math.max(1, page-2); i <= Math.min(pages, page+2); i++) {
+        html += `<li class="page-item ${i===page?'active':''}"><a class="page-link" href="#" onclick="goToPage(${i})">${i}</a></li>`;
+    }
+    if (page < pages) html += `<li class="page-item"><a class="page-link" href="#" onclick="goToPage(${page+1})">Next</a></li>`;
+    ul.innerHTML = html;
+}
+
+function goToPage(page) { currentPage = page; loadTickets(); }
+
+function sortTable(col) {
+    if (currentSort === col) { currentOrder = currentOrder === 'ASC' ? 'DESC' : 'ASC'; }
+    else { currentSort = col; currentOrder = 'ASC'; }
+    currentPage = 1;
+    loadTickets();
+}
+
+function toggleFilter(type) {
+    const menu = document.getElementById('filterMenu_' + type);
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+
+function clearFilter(type) {
+    currentFilters[type] = [];
+    document.querySelectorAll(`.filter-check[data-filter="${type}"]`).forEach(cb => cb.checked = false);
+    document.getElementById(type + '_count').textContent = '0';
+    currentPage = 1;
+    loadTickets();
+}
+
+document.addEventListener('click', function(e) {
+    if (e.target.classList.contains('filter-check')) {
+        const type = e.target.dataset.filter;
+        const val = e.target.value;
+        if (e.target.checked) {
+            if (!currentFilters[type].includes(val)) currentFilters[type].push(val);
+        } else {
+            currentFilters[type] = currentFilters[type].filter(v => v !== val);
+        }
+        document.getElementById(type + '_count').textContent = currentFilters[type].length;
+        currentPage = 1;
+        loadTickets();
+    }
+});
 </script>
 
-</body>
-</html>
+<?php require __DIR__ . '/../includes/footer.php'; ?>

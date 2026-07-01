@@ -18,6 +18,10 @@ FPIAP-SMARTs (Free Public Internet Access Program - Service Management and Respo
 cagayansite_tickets/
 ├── index.php                 # Login page (entry point)
 ├── logout.php                # Session destruction
+├── includes/                 # Shared PHP includes
+│   ├── admin_header.php      # Admin navbar (set $activePage before including)
+│   ├── user_header.php       # User navbar (set $activePage before including)
+│   └── footer.php            # Shared footer with Bootstrap JS + notifications.js
 ├── config/
 │   ├── db.php                # PDO connection (localhost, root, no pass)
 │   ├── auth.php              # Session config, CSRF, role checks (requireAdmin, requireLogin)
@@ -42,10 +46,10 @@ cagayansite_tickets/
 │   ├── describe_table.php    # DB table inspector
 │   └── account.php           # Admin account settings
 ├── users/                    # Regular user pages (requireLogin())
-│   ├── dashboard.php         # User dashboard (minimal)
-│   ├── ticket.php            # Create ticket
-│   ├── view_tickets.php      # View own tickets
-│   ├── site.php              # View sites
+│   ├── dashboard.php         # User dashboard with personal ticket stats
+│   ├── ticket.php            # Create ticket (site search, priority, subject, notes)
+│   ├── view_tickets.php      # View own tickets (AJAX filtering, sorting, pagination)
+│   ├── site.php              # Manage own sites (CRUD, CSV import, bulk ops)
 │   ├── notifications.php     # User notifications
 │   └── notification.php      # Notification helper
 ├── notif/
@@ -64,11 +68,15 @@ cagayansite_tickets/
 ├── scripts/                  # CLI/cron scripts
 │   ├── automated_backup.php  # Cron backup (full/database/filesystem)
 │   ├── auto_close_resolved_tickets.php
-│   ├── cleanup_backups.php   # Remove old backups
+│   ├── cleanup_backups.php   # Remove old backup files
 │   ├── check_sites.php       # DB schema inspector
 │   ├── create_backup_table.php
-│   └── setup_data_export_db.php
-├── assets/                   # Images (FPIAP-SMARTs.png, freewifilogo.png)
+│   ├── setup_data_export_db.php
+│   └── add_ticket_priority.php  # Migration: adds priority column to tickets
+├── assets/
+│   ├── js/
+│   │   └── notifications.js  # Shared notification bell JS (auto-included via footer.php)
+│   └── images/               # FPIAP-SMARTs.png, freewifilogo.png
 └── backups/                  # Generated backup files
 ```
 
@@ -76,7 +84,7 @@ cagayansite_tickets/
 
 - **users**: id, personnel_id (FK), password (bcrypt), role (admin/user), status (active/inactive)
 - **personnels**: id, fullname, gmail (used as login username)
-- **tickets**: id, ticket_number, subject, notes, status, site_id (FK), created_by (FK→personnels), duration (minutes), created_at, updated_at
+- **tickets**: id, ticket_number, subject, notes, status, priority (low/medium/high/critical), site_id (FK), created_by (FK→personnels), duration (minutes), created_at, updated_at
 - **sites**: id, site_name, isp, province, municipality, project_name, status
 - **system_logs**: id, user_id, personnel_id, action, entity_type, entity_id, details (JSON), description, ip_address, user_agent, severity, status, session_id, created_at
 - **notifications**: user_id, message, is_read, created_at
