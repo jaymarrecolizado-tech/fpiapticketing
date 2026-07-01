@@ -380,29 +380,54 @@ elseif ($action == 'preview_csv') {
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
         echo json_encode(['error' => 'Upload failed.']); exit;
     }
-    $handle = fopen($_FILES['csv_file']['tmp_name'], 'r');
+    // Validate file size (max 10MB) and type
+    $file = $_FILES['csv_file'];
+    if ($file['size'] > 10 * 1024 * 1024) {
+        echo json_encode(['error' => 'File too large (max 10MB).']); exit;
+    }
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, ['csv', 'txt'])) {
+        echo json_encode(['error' => 'Only CSV and TXT files are allowed.']); exit;
+    }
+    $handle = fopen($file['tmp_name'], 'r');
     $row = 0;
     $validRows = [];
     $duplicateRows = [];
     $errorRows = [];
+    $maxRows = 5000;
 
     while (($data = fgetcsv($handle, 1000, ',')) !== false) {
         $row++;
+        if ($row > $maxRows) {
+            $errorRows[] = ['row' => $row, 'data' => [], 'reason' => "Exceeded maximum rows ($maxRows). Remaining rows skipped."];
+            break;
+        }
         if ($row === 1 && strcasecmp($data[0],'project_name') === 0) continue;
 
-        $project = trim($data[0] ?? '');
-        $location = trim($data[1] ?? '');
-        $site = trim($data[2] ?? '');
-        $apSiteCode = trim($data[3] ?? '');
-        $isp = trim($data[4] ?? '');
-        $status = trim($data[5] ?? '');
-        $province = trim($data[6] ?? '');
-        $municipality = trim($data[7] ?? '');
+        $project = Sanitizer::normalize(trim($data[0] ?? ''));
+        $location = Sanitizer::normalize(trim($data[1] ?? ''));
+        $site = Sanitizer::normalize(trim($data[2] ?? ''));
+        $apSiteCode = Sanitizer::normalize(trim($data[3] ?? ''));
+        $isp = Sanitizer::normalize(trim($data[4] ?? ''));
+        $status = Sanitizer::normalize(trim($data[5] ?? ''));
+        $province = Sanitizer::normalize(trim($data[6] ?? ''));
+        $municipality = Sanitizer::normalize(trim($data[7] ?? ''));
 
         $csvRow = compact('project','location','site','apSiteCode','isp','status','province','municipality');
 
-        if (!Validator::string($project,1,150) || !Validator::string($location,1,150) || !Validator::string($site,1,150) || !Validator::string($apSiteCode,1,50) || !Validator::string($isp,1,150) || !Validator::inList($status,$statusOptions)) {
-            $errorRows[] = ['row' => $row, 'data' => $csvRow, 'reason' => 'Invalid data (check required fields and status)'];
+        // Validate fields individually for better error messages
+        $fieldErrors = [];
+        if (!Validator::string($project,1,150)) $fieldErrors[] = 'project_name';
+        if (!Validator::string($location,1,150)) $fieldErrors[] = 'location_name';
+        if (!Validator::string($site,1,150)) $fieldErrors[] = 'site_name';
+        if (!empty($apSiteCode) && !Validator::string($apSiteCode,1,50)) $fieldErrors[] = 'ap_site_code';
+        if (!Validator::string($isp,1,150)) $fieldErrors[] = 'isp';
+        if (!Validator::inList($status,$statusOptions)) $fieldErrors[] = 'status';
+        if (!Validator::string($province,1,150)) $fieldErrors[] = 'province';
+        if (!Validator::string($municipality,1,150)) $fieldErrors[] = 'municipality';
+
+        if (!empty($fieldErrors)) {
+            $errorRows[] = ['row' => $row, 'data' => $csvRow, 'reason' => 'Invalid: ' . implode(', ', $fieldErrors)];
             continue;
         }
         $normStatus = normalizeSiteStatus($status);
@@ -472,42 +497,43 @@ elseif ($action == 'import_csv_confirmed') {
     $skipped = 0;
     $errors = [];
 
-    // Process new (valid) rows — always insert
-    foreach ($preview['valid'] as $item) {
-        $d = $item['data'];
-        try {
+    $pdo->beginTransaction();
+    try {
+        // Process new (valid) rows — always insert
+        foreach ($preview['valid'] as $item) {
+            $d = $item['data'];
             $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, ap_site_code, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
             $stmt->execute([$d['project'],$d['location'],$d['site'],$d['apSiteCode'],$d['isp'],$d['status'],$d['province'],$d['municipality'],$createdBy]);
             $inserted++;
-        } catch (PDOException $e) {
-            $errors[] = "Row {$item['row']}: DB insert error";
         }
-    }
 
-    // Process duplicate rows based on user decisions
-    foreach ($preview['duplicates'] as $item) {
-        $rowNum = $item['row'];
-        if (in_array($rowNum, $skipRows)) {
-            $skipped++;
-            continue;
-        }
-        if (in_array($rowNum, $overrideRows)) {
-            $d = $item['data'];
-            $existingId = $item['existing']['id'];
-            try {
+        // Process duplicate rows based on user decisions
+        foreach ($preview['duplicates'] as $item) {
+            $rowNum = $item['row'];
+            if (in_array($rowNum, $skipRows)) {
+                $skipped++;
+                continue;
+            }
+            if (in_array($rowNum, $overrideRows)) {
+                $d = $item['data'];
+                $existingId = $item['existing']['id'];
                 $stmt = $pdo->prepare("UPDATE sites SET isp=?, status=?, project_name=?, location_name=?, site_name=?, ap_site_code=?, province=?, municipality=? WHERE id=?");
                 $stmt->execute([$d['isp'],$d['status'],$d['project'],$d['location'],$d['site'],$d['apSiteCode'],$d['province'],$d['municipality'],$existingId]);
                 $updated++;
-            } catch (PDOException $e) {
-                $errors[] = "Row $rowNum: DB update error";
+            } else {
+                $skipped++;
             }
-        } else {
-            $skipped++;
         }
-    }
 
-    // Validation errors are always skipped
-    $skipped += count($preview['errors']);
+        // Validation errors are always skipped
+        $skipped += count($preview['errors']);
+
+        $pdo->commit();
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        error_log('CSV import confirmed error: '.$e->getMessage());
+        $errors[] = 'Database error during import. All changes rolled back.';
+    }
 
     echo json_encode([
         'inserted' => $inserted,

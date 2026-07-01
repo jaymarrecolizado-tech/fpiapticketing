@@ -387,60 +387,90 @@ elseif ($action == 'delete') {
 
 elseif ($action == 'import_csv') {
     $csrf = $_POST['csrf_token'] ?? '';
-    if (!validateCSRFToken($csrf)) { echo 'Error: Invalid security token.'; exit; }
+    if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
-        echo 'Error: Upload failed.'; exit;
+        echo json_encode(['error' => 'Upload failed.']); exit;
     }
+    // Validate file size (max 5MB) and type
+    $file = $_FILES['csv_file'];
+    if ($file['size'] > 5 * 1024 * 1024) {
+        echo json_encode(['error' => 'File too large (max 5MB).']); exit;
+    }
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, ['csv', 'txt'])) {
+        echo json_encode(['error' => 'Only CSV and TXT files are allowed.']); exit;
+    }
+    // Max 1000 rows to prevent memory exhaustion
+    $maxRows = 1000;
     $handle = fopen($_FILES['csv_file']['tmp_name'], 'r');
     $row = 0;
     $errors = [];
     $inserted = 0;
-    // Get current user's personnel_id for CSV import
+    $skipped = 0;
+
     $creatorStmt = $pdo->prepare("SELECT p.id FROM personnels p JOIN users u ON p.id = u.personnel_id WHERE u.id = ?");
     $creatorStmt->execute([$_SESSION['user_id']]);
     $creatorResult = $creatorStmt->fetch(PDO::FETCH_ASSOC);
     $createdBy = $creatorResult ? $creatorResult['id'] : $personnelId;
-    
-    while (($data = fgetcsv($handle, 1000, ',')) !== false) {
-        $row++;
-        // skip header
-        if ($row === 1 && strcasecmp($data[0],'project_name') === 0) continue;
-        $project = trim($data[0] ?? '');
-        $location = trim($data[1] ?? '');
-        $site = trim($data[2] ?? '');
-        $isp = trim($data[3] ?? '');
-        $status = trim($data[4] ?? '');
-        $province = trim($data[5] ?? '');
-        $municipality = trim($data[6] ?? '');
-        if (!Validator::string($project,1,150) || !Validator::string($location,1,150) || !Validator::string($site,1,150) || !Validator::string($isp,1,150) || !Validator::inList($status,$statusOptions)) {
-            $errors[] = "Row $row: invalid data";
-            continue;
-        }
-        if (!Validator::string($province,1,150) || !Validator::string($municipality,1,150)) {
-            $errors[] = "Row $row: invalid province/municipality";
-            continue;
-        }
-        // duplicate detection (scoped to current user)
-        if (isDuplicateSite($project, $location, $site, $province, $municipality, null, $personnelId)) {
-            $errors[] = "Row $row: duplicate record";
-            continue;
-        }
-        try {
-            // Get creator's personnel ID for CSV import
-            $creatorStmt = $pdo->prepare("SELECT p.id FROM personnels p JOIN users u ON p.id = u.personnel_id WHERE u.id = ?");
-            $creatorStmt->execute([$_SESSION['user_id']]);
-            $creatorResult = $creatorStmt->fetch(PDO::FETCH_ASSOC);
-            $createdBy = $creatorResult ? $creatorResult['id'] : 1; // Default to 1 if not found
-            
-            $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?)");
-            $stmt->execute([$project,$location,$site,$isp,$status,$province,$municipality,$createdBy]);
+
+    $pdo->beginTransaction();
+    try {
+        while (($data = fgetcsv($handle, 1000, ',')) !== false) {
+            $row++;
+            if ($row > $maxRows) {
+                $errors[] = "Exceeded maximum rows ($maxRows). Remaining rows skipped.";
+                break;
+            }
+            // skip header
+            if ($row === 1 && strcasecmp($data[0],'project_name') === 0) continue;
+
+            $project = Sanitizer::normalize(trim($data[0] ?? ''));
+            $location = Sanitizer::normalize(trim($data[1] ?? ''));
+            $site = Sanitizer::normalize(trim($data[2] ?? ''));
+            $apSiteCode = Sanitizer::normalize(trim($data[3] ?? ''));
+            $isp = Sanitizer::normalize(trim($data[4] ?? ''));
+            $status = Sanitizer::normalize(trim($data[5] ?? ''));
+            $province = Sanitizer::normalize(trim($data[6] ?? ''));
+            $municipality = Sanitizer::normalize(trim($data[7] ?? ''));
+
+            // Validate fields
+            $fieldErrors = [];
+            if (!Validator::string($project,1,150)) $fieldErrors[] = 'project_name';
+            if (!Validator::string($location,1,150)) $fieldErrors[] = 'location_name';
+            if (!Validator::string($site,1,150)) $fieldErrors[] = 'site_name';
+            if (!empty($apSiteCode) && !Validator::string($apSiteCode,1,50)) $fieldErrors[] = 'ap_site_code';
+            if (!Validator::string($isp,1,150)) $fieldErrors[] = 'isp';
+            if (!Validator::inList($status,$statusOptions)) $fieldErrors[] = 'status (invalid value: '.htmlspecialchars($status).')';
+            if (!Validator::string($province,1,150)) $fieldErrors[] = 'province';
+            if (!Validator::string($municipality,1,150)) $fieldErrors[] = 'municipality';
+
+            if (!empty($fieldErrors)) {
+                $errors[] = "Row $row: invalid " . implode(', ', $fieldErrors);
+                $skipped++;
+                continue;
+            }
+
+            $status = strtoupper($status);
+
+            // duplicate detection (scoped to current user, includes ap_site_code)
+            if (isDuplicateSite($project, $location, $site, $apSiteCode, $province, $municipality, null, $personnelId)) {
+                $errors[] = "Row $row: duplicate ({$site} in {$municipality})";
+                $skipped++;
+                continue;
+            }
+
+            $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, ap_site_code, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
+            $stmt->execute([$project,$location,$site,$apSiteCode,$isp,$status,$province,$municipality,$createdBy]);
             $inserted++;
-        } catch (PDOException $e) {
-            $errors[] = "Row $row: db error";
         }
+        fclose($handle);
+        $pdo->commit();
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        error_log('CSV import error: '.$e->getMessage());
+        $errors[] = "Database error during import. Changes rolled back.";
     }
-    fclose($handle);
-    echo json_encode(['inserted'=>$inserted,'errors'=>$errors]);
+    echo json_encode(['inserted'=>$inserted, 'skipped'=>$skipped, 'errors'=>$errors]);
     exit;
 }
 
