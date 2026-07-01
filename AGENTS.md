@@ -47,8 +47,10 @@ cagayansite_tickets/
 │   └── account.php           # Admin account settings
 ├── users/                    # Regular user pages (requireLogin())
 │   ├── dashboard.php         # User dashboard with personal ticket stats
-│   ├── ticket.php            # Create ticket (site search, priority, subject, notes)
+│   ├── ticket.php            # Create ticket (site search, priority, category, due date)
 │   ├── view_tickets.php      # View own tickets (AJAX filtering, sorting, pagination)
+│   ├── detail_ticket.php     # Ticket detail with comments and file attachments
+│   ├── account.php           # User account settings (password change)
 │   ├── site.php              # Manage own sites (CRUD, CSV import, bulk ops)
 │   ├── notifications.php     # User notifications
 │   └── notification.php      # Notification helper
@@ -72,7 +74,11 @@ cagayansite_tickets/
 │   ├── check_sites.php       # DB schema inspector
 │   ├── create_backup_table.php
 │   ├── setup_data_export_db.php
-│   └── add_ticket_priority.php  # Migration: adds priority column to tickets
+│   ├── add_ticket_priority.php    # Migration: adds priority column
+│   ├── add_ticket_comments.php    # Migration: creates ticket_comments table
+│   ├── add_ticket_assignment.php  # Migration: adds assigned_to column
+│   ├── add_ticket_attachments.php # Migration: creates ticket_attachments table
+│   └── add_categories_and_due_date.php # Migration: adds category, due_date columns
 ├── assets/
 │   ├── js/
 │   │   └── notifications.js  # Shared notification bell JS (auto-included via footer.php)
@@ -84,7 +90,9 @@ cagayansite_tickets/
 
 - **users**: id, personnel_id (FK), password (bcrypt), role (admin/user), status (active/inactive)
 - **personnels**: id, fullname, gmail (used as login username)
-- **tickets**: id, ticket_number, subject, notes, status, priority (low/medium/high/critical), category, site_id (FK), created_by (FK→personnels), assigned_to (FK→personnels), duration (minutes), created_at, updated_at, solved_date, due_date
+- **tickets**: id, ticket_number, subject, notes, status, priority (low/medium/high/critical), category (connectivity/hardware/software/power/security/other), site_id (FK), created_by (FK→personnels), assigned_to (FK→personnels), duration (minutes), created_at, updated_at, solved_date, due_date
+- **ticket_comments**: id, ticket_id (FK→tickets), user_id (FK→users), comment, created_at
+- **ticket_attachments**: id, ticket_id (FK→tickets), user_id (FK→users), filename, original_name, file_size, mime_type, created_at
 - **sites**: id, site_name, isp, province, municipality, project_name, status
 - **system_logs**: id, user_id, personnel_id, action, entity_type, entity_id, details (JSON), description, ip_address, user_agent, severity, status, session_id, created_at
 - **notifications**: user_id, message, is_read, created_at
@@ -92,11 +100,13 @@ cagayansite_tickets/
 ## Ticket Status Flow
 
 ```
-OPEN → IN_PROGRESS → RESOLVED → CLOSED
+OPEN → IN_PROGRESS → RESOLVED → CLOSED → OPEN (reopening)
 ```
 
 - **Aging threshold**: Tickets OPEN or IN_PROGRESS for 3+ days (4320 minutes)
 - **Auto-close**: RESOLVED tickets auto-close after 7 days via `auto_close.php`
+- **Reopening**: CLOSED tickets can be reopened to OPEN status via edit_ticket.php
+- **Due date**: Optional deadline tracking; overdue tickets can be filtered in reports
 
 ## Security Patterns
 
@@ -149,6 +159,34 @@ OPEN → IN_PROGRESS → RESOLVED → CLOSED
 - Methods: camelCase (`requireAdmin()`, `logAuthEvent()`)
 - DB columns: snake_case (`ticket_number`, `site_name`, `created_by`)
 - Ticket statuses: UPPERCASE (`OPEN`, `IN_PROGRESS`, `RESOLVED`, `CLOSED`)
+
+## Ticket Features
+
+### Comments Thread
+- AJAX-powered comment system on ticket detail pages
+- Endpoints: `add_comment` (POST), `get_comments` (GET)
+- Comments stored in `ticket_comments` table with user attribution
+- Both admin and user detail pages support comments
+
+### File Attachments
+- File upload on ticket detail pages (images, PDF, DOC, XLS)
+- Max 10MB per file, stored in `uploads/tickets/` with random filenames
+- Endpoints: `upload_attachment`, `get_attachments`, `delete_attachment`
+- Files tracked in `ticket_attachments` table
+
+### Ticket Assignment
+- `assigned_to` column references `personnels.id`
+- Assignment dropdown in admin edit_ticket.php
+- Assigned person displayed in detail view sidebar
+
+### Categories & Due Date
+- `category`: connectivity, hardware, software, power, security, other
+- `due_date`: datetime field for deadline tracking
+- Both fields on ticket creation forms (admin and user)
+
+### Ticket Reopening
+- CLOSED tickets can be reopened to OPEN via edit_ticket.php
+- Reopening clears solved_date and resets duration to 0
 
 ## Dashboard API Pattern
 
@@ -209,8 +247,10 @@ Data is fetched in full, then filtered/sorted client-side via JavaScript.
 1. Create PHP file in `admin/` or `users/` directory
 2. Require `config/db.php` and `config/auth.php` at top
 3. Call `requireAdmin()` or `requireLogin()` as appropriate
-4. Copy navbar from existing page
-5. Add nav link in parent page's dropdown menu
+4. Set `$activePage` variable (dashboard/tickets/sites/reports/settings)
+5. Include shared header: `require __DIR__ . '/../includes/admin_header.php'` or `user_header.php`
+6. Include shared footer: `require __DIR__ . '/../includes/footer.php'`
+7. Add nav link in the shared header file if needed
 
 ### Database changes
 - All changes via PDO prepared statements
@@ -226,14 +266,26 @@ Data is fetched in full, then filtered/sorted client-side via JavaScript.
 | `admin/systemlog.php` | AJAX POST | Server-side (LIMIT/OFFSET) | Default 25/page |
 | `admin/personnel.php` | Server-side PHP | **None** (all rows) | Small table, acceptable |
 
-## CSV Import (admin/site.php)
+## CSV Import
 
-Two-phase import system:
+### Admin Import (admin/site.php) — Two-Phase Preview/Confirm
 1. **Preview**: Upload CSV → validate rows → show summary (valid/duplicates/errors) in side panel
 2. **Confirm**: Click "Confirm Import" → insert/update DB from session-stored preview data
-- Duplicate detection uses 6-field composite match (site_name, project_name, isp, province, municipality, barangay)
+- Duplicate detection uses 6-field composite match (project_name, location_name, site_name, ap_site_code, province, municipality)
 - Override performs full UPDATE on all 8 data fields
-- Preview data stored in `$_SESSION['csv_preview']`
+- Transaction-wrapped with rollback on error
+- File size limit: 10MB, Row limit: 5000, Allowed: CSV/TXT
+- All fields sanitized via `Sanitizer::normalize()` before storage
+
+### User Import (users/site.php) — Direct Insert
+- Single-phase: upload → validate → insert (no preview)
+- Duplicate detection scoped to current user's sites
+- Transaction-wrapped with rollback on error
+- File size limit: 5MB, Row limit: 1000, Allowed: CSV/TXT
+- All fields sanitized via `Sanitizer::normalize()` before storage
+
+### Template Format
+Both importers use 8-column CSV: `project_name,location_name,site_name,ap_site_code,isp,status,province,municipality`
 
 ## Report Filters (site_report.php, ticket_report.php)
 
@@ -269,6 +321,7 @@ Two-phase import system:
 - Ticket number generation happens server-side; don't let users set it
 - Duration is stored in **minutes** (1440 = 1 day, 4320 = 3 days)
 - The `backups/` directory contains generated backup files — do not commit
+- The `uploads/tickets/` directory contains uploaded attachments — do not commit
 - CSP allows `'unsafe-inline'` for scripts and styles (required for inline JS in PHP files)
 - Session cookie is named `JOBORDER_SESSID`
 - Admin nav: Reports dropdown → "Ticket Report" and "Sites Report" (site_report.php)
