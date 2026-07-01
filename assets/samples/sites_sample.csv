@@ -1,0 +1,4 @@
+id,project_name,location_name,site_name,ap_site_code,isp,province,municipality,status,created_at,updated_at,created_by
+1,Project Alpha,Location A,Site 001,AP001,ISP Corp,Cagayan,City A,Active,2024-01-15 10:30:00,2024-01-20 14:45:00,admin
+2,Project Beta,Location B,Site 002,AP002,Net Provider,Cagayan,City B,Active,2024-01-16 11:00:00,,admin
+3,Project Gamma,Location C,Site 003,AP003,Telecom Inc,Cagayan,City C,Inactive,2024-01-17 09:15:00,2024-01-25 16:20:00,admin
