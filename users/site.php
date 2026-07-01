@@ -663,7 +663,7 @@ $totalPages = ceil($totalSites / $perPage);
       Tickets
       </a>
       <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="viewtickets.php">View Tickets</a></li>
+      <li><a class="dropdown-item" href="view_tickets.php">View Tickets</a></li>
       <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li> 
       </ul>
     </li>

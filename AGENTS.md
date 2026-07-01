@@ -168,6 +168,27 @@ switch ($action) {
 
 Filters are passed as POST data and built into SQL via `buildWhereClause($filters)`.
 
+## Report Page API Pattern
+
+`admin/site_report.php` and `admin/ticket_report.php` use a similar AJAX pattern:
+
+```php
+$action = $_POST['action'] ?? '';
+switch ($action) {
+    case 'get_filter_options': // Dropdown options for all filters
+    case 'generate_report':    // Full dataset for selected report type
+}
+```
+
+Report types (selected via report type dropdown):
+- `1_site_summary` — Site summary by province/municipality
+- `3_isp_performance` — ISP ticket resolution performance
+- `5_project_report` — Project-wise ticket distribution
+- `7_aging_tickets` — Aging open/in-progress tickets
+- `8_monthly_activity` — Monthly ticket creation trends
+
+Data is fetched in full, then filtered/sorted client-side via JavaScript.
+
 ## Common Tasks
 
 ### Adding a new ticket field
@@ -188,6 +209,52 @@ Filters are passed as POST data and built into SQL via `buildWhereClause($filter
 - Migration scripts go in `scripts/` directory
 - Use `DESCRIBE tablename` to inspect schema
 
+## Table Loading Patterns
+
+| Page | Method | Pagination | Notes |
+|------|--------|-----------|-------|
+| `admin/viewtickets.php` | AJAX POST | Server-side (LIMIT/OFFSET) | Default 25/page |
+| `admin/site.php` | Server-side PHP | Server-side (LIMIT/OFFSET, page reload) | Default 10/page |
+| `admin/systemlog.php` | AJAX POST | Server-side (LIMIT/OFFSET) | Default 25/page |
+| `admin/personnel.php` | Server-side PHP | **None** (all rows) | Small table, acceptable |
+
+## CSV Import (admin/site.php)
+
+Two-phase import system:
+1. **Preview**: Upload CSV → validate rows → show summary (valid/duplicates/errors) in side panel
+2. **Confirm**: Click "Confirm Import" → insert/update DB from session-stored preview data
+- Duplicate detection uses 6-field composite match (site_name, project_name, isp, province, municipality, barangay)
+- Override performs full UPDATE on all 8 data fields
+- Preview data stored in `$_SESSION['csv_preview']`
+
+## Report Filters (site_report.php, ticket_report.php)
+
+- Filter options fetched via AJAX `action=get_filter_options`
+- Filters applied client-side via `buildWhereClause()` → `applyFilters()` → `generateReport()`
+- `applyMultiSelect()` must call `applyFilters()` after updating selection
+- `updateSelectionCount()` uses explicit `labelMap` object (not string replace) to match HTML IDs
+- `buildWhereClause()` handles arrays for `province`/`municipality` with `IN (?)` placeholders
+
+## Deployment
+
+### Local (WAMP64)
+- Apache on port 80, MySQL on port 3306
+- MySQL binary: `C:\wamp64\bin\mysql\mysql9.1.0\bin\mysql.exe`
+- Admin: `admin@dict.gov.ph` / `admin123`
+
+### VPS (Hostinger KVM2)
+- IP: `187.77.150.203`, Domain: `fwticket.dictr2.cloud`
+- Site user: `dictr2-fwticket`, SSH: `root@dictr2`
+- Nginx + PHP-FPM (PHP 8.4) on port 20006
+- App root: `/home/fwtickets/htdocs/fwticket.dictr2.cloud/`
+- Nginx config: `/etc/nginx/sites-enabled/custom-domain.conf`
+- PHP error log: `/home/dictr2-fwticket/logs/php/error.log`
+- Admin: `admin@dict.gov.ph` / `Fwticket@2026!`
+
+### VPS Case Sensitivity
+- `lib/Validator.php` and `lib/Sanitizer.php` filenames are case-sensitive on Linux
+- Always use PascalCase: `Validator.php`, `Sanitizer.php`
+
 ## Known Gotchas
 
 - `$_SESSION['personnel_id']` is the FK used for `tickets.created_by` — NOT `user_id`
@@ -196,3 +263,7 @@ Filters are passed as POST data and built into SQL via `buildWhereClause($filter
 - The `backups/` directory contains generated backup files — do not commit
 - CSP allows `'unsafe-inline'` for scripts and styles (required for inline JS in PHP files)
 - Session cookie is named `JOBORDER_SESSID`
+- Admin nav: Reports dropdown → "Ticket Report" and "Sites Report" (site_report.php)
+- User pages nav: `view_tickets.php` (with underscore) — NOT `viewtickets.php`
+- `config/auth.php` `cookie_secure` must be `1` for production HTTPS (currently `0` for localhost)
+- `config/db.php` VPS credentials differ from local (see Deployment section)

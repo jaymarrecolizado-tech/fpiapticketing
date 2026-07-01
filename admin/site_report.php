@@ -1456,20 +1456,28 @@ function getReportName($type) {
     countBadge.textContent = selected;
     countBadge.style.display = selected > 0 ? 'inline-block' : 'none';
 
-    const labelId = containerId.replace('Options', 'Selected');
-    const label = document.getElementById(labelId);
+    const labelMap = {
+      statusOptions: 'selectedStatus',
+      siteOptions: 'selectedSite',
+      createdByOptions: 'selectedCreatedBy',
+      ispOptions: 'selectedISP',
+      provinceOptions: 'selectedProvince',
+      municipalityOptions: 'selectedMunicipality',
+      projectOptions: 'selectedProject'
+    };
+    const defaultLabels = {
+      statusOptions: 'All Status',
+      siteOptions: 'All Sites',
+      createdByOptions: 'All Users',
+      ispOptions: 'All ISPs',
+      provinceOptions: 'All Provinces',
+      municipalityOptions: 'All Municipalities',
+      projectOptions: 'All Projects'
+    };
+    const labelId = labelMap[containerId];
+    const label = labelId ? document.getElementById(labelId) : null;
     if (label) {
-      if (selected === 0) {
-        if (labelId.startsWith('selectedStatus')) label.textContent = 'All Status';
-        else if (labelId.startsWith('selectedSite')) label.textContent = 'All Sites';
-        else if (labelId.startsWith('selectedCreatedBy')) label.textContent = 'All Users';
-        else if (labelId.startsWith('selectedISP')) label.textContent = 'All ISPs';
-        else if (labelId.startsWith('selectedProvince')) label.textContent = 'All Provinces';
-        else if (labelId.startsWith('selectedMunicipality')) label.textContent = 'All Municipalities';
-        else if (labelId.startsWith('selectedProject')) label.textContent = 'All Projects';
-      } else {
-        label.textContent = `${selected} selected`;
-      }
+      label.textContent = selected === 0 ? defaultLabels[containerId] : `${selected} selected`;
     }
   }
 
@@ -1478,6 +1486,7 @@ function getReportName($type) {
     const bs = bootstrap.Dropdown.getInstance(dropdown.querySelector('.dropdown-toggle'));
     if (bs) bs.hide();
     updateActiveFilters();
+    applyFilters();
   }
 
   function clearMultiSelect(type) {

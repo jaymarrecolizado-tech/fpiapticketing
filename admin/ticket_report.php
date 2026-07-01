@@ -44,12 +44,24 @@ function buildWhereClause($filters, &$params = []) {
         }
     }
     if (!empty($filters['province'])) {
-        $clauses[] = "s.province = ?";
-        $params[] = $filters['province'];
+        if (is_array($filters['province'])) {
+            $placeholders = implode(',', array_fill(0, count($filters['province']), '?'));
+            $clauses[] = "s.province IN ($placeholders)";
+            $params = array_merge($params, $filters['province']);
+        } else {
+            $clauses[] = "s.province = ?";
+            $params[] = $filters['province'];
+        }
     }
     if (!empty($filters['municipality'])) {
-        $clauses[] = "s.municipality = ?";
-        $params[] = $filters['municipality'];
+        if (is_array($filters['municipality'])) {
+            $placeholders = implode(',', array_fill(0, count($filters['municipality']), '?'));
+            $clauses[] = "s.municipality IN ($placeholders)";
+            $params = array_merge($params, $filters['municipality']);
+        } else {
+            $clauses[] = "s.municipality = ?";
+            $params[] = $filters['municipality'];
+        }
     }
     if (!empty($filters['created_by'])) {
         if (is_array($filters['created_by'])) {
@@ -464,7 +476,7 @@ if ($action === 'get_filter_options') {
       </a>
       <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
       <li><a class="dropdown-item" href="ticket_report.php">Ticket Report</a></li>
-      <li><a class="dropdown-item" href="#"></a></li> 
+      <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
       </ul>
     </li>
         
@@ -1355,6 +1367,7 @@ if ($action === 'get_filter_options') {
       const drop = new bootstrap.Dropdown(dropBtn);
       drop.hide();
     }
+    applyFilters();
   }
 
   function clearMultiSelect(type) {

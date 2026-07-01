@@ -373,26 +373,23 @@ elseif ($action == 'delete') {
     exit;
 }
 
-elseif ($action == 'import_csv') {
+// Phase 1: Parse CSV, detect duplicates, return preview for user review
+elseif ($action == 'preview_csv') {
     $csrf = $_POST['csrf_token'] ?? '';
-    if (!validateCSRFToken($csrf)) { echo 'Error: Invalid security token.'; exit; }
+    if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
-        echo 'Error: Upload failed.'; exit;
+        echo json_encode(['error' => 'Upload failed.']); exit;
     }
     $handle = fopen($_FILES['csv_file']['tmp_name'], 'r');
     $row = 0;
-    $errors = [];
-    $inserted = 0;
-    // Preload creator once for CSV import to avoid repeated queries
-    $creatorStmt = $pdo->prepare("SELECT p.id FROM personnels p JOIN users u ON p.id = u.personnel_id WHERE u.id = ?");
-    $creatorStmt->execute([$_SESSION['user_id']]);
-    $creatorResult = $creatorStmt->fetch(PDO::FETCH_ASSOC);
-    $createdBy = $creatorResult ? $creatorResult['id'] : 1; // Default to 1 if not found
+    $validRows = [];
+    $duplicateRows = [];
+    $errorRows = [];
 
     while (($data = fgetcsv($handle, 1000, ',')) !== false) {
         $row++;
-        // skip header
         if ($row === 1 && strcasecmp($data[0],'project_name') === 0) continue;
+
         $project = trim($data[0] ?? '');
         $location = trim($data[1] ?? '');
         $site = trim($data[2] ?? '');
@@ -402,37 +399,122 @@ elseif ($action == 'import_csv') {
         $province = trim($data[6] ?? '');
         $municipality = trim($data[7] ?? '');
 
+        $csvRow = compact('project','location','site','apSiteCode','isp','status','province','municipality');
+
         if (!Validator::string($project,1,150) || !Validator::string($location,1,150) || !Validator::string($site,1,150) || !Validator::string($apSiteCode,1,50) || !Validator::string($isp,1,150) || !Validator::inList($status,$statusOptions)) {
-            $errors[] = "Row $row: invalid data";
+            $errorRows[] = ['row' => $row, 'data' => $csvRow, 'reason' => 'Invalid data (check required fields and status)'];
             continue;
         }
-
-        $status = normalizeSiteStatus($status);
-        if ($status === false) {
-            $errors[] = "Row $row: invalid status";
+        $normStatus = normalizeSiteStatus($status);
+        if ($normStatus === false) {
+            $errorRows[] = ['row' => $row, 'data' => $csvRow, 'reason' => 'Invalid status value'];
             continue;
         }
-
+        $csvRow['status'] = $normStatus;
         if (!Validator::string($province,1,150) || !Validator::string($municipality,1,150)) {
-            $errors[] = "Row $row: invalid province/municipality";
+            $errorRows[] = ['row' => $row, 'data' => $csvRow, 'reason' => 'Invalid province or municipality'];
             continue;
         }
 
-        // duplicate detection
-        if (isDuplicateSite($project, $location, $site, $apSiteCode, $province, $municipality)) {
-            $errors[] = "Row $row: duplicate record";
-            continue;
-        }
-        try {
-            $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, ap_site_code, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
-            $stmt->execute([$project,$location,$site,$apSiteCode,$isp,$status,$province,$municipality,$createdBy]);
-            $inserted++;
-        } catch (PDOException $e) {
-            $errors[] = "Row $row: db error";
+        // Check for duplicate in DB and fetch existing record for comparison
+        $dupSql = "SELECT * FROM sites WHERE project_name=? AND location_name=? AND site_name=? AND ap_site_code=? AND province=? AND municipality=? LIMIT 1";
+        $dupStmt = $pdo->prepare($dupSql);
+        $dupStmt->execute([$project, $location, $site, $apSiteCode, $province, $municipality]);
+        $existing = $dupStmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing) {
+            $duplicateRows[] = ['row' => $row, 'data' => $csvRow, 'existing' => $existing];
+        } else {
+            $validRows[] = ['row' => $row, 'data' => $csvRow];
         }
     }
     fclose($handle);
-    echo json_encode(['inserted'=>$inserted,'errors'=>$errors]);
+
+    // Store preview data in session for Phase 2
+    $_SESSION['csv_preview'] = [
+        'valid' => $validRows,
+        'duplicates' => $duplicateRows,
+        'errors' => $errorRows,
+    ];
+
+    echo json_encode([
+        'valid' => $validRows,
+        'duplicates' => $duplicateRows,
+        'errors' => $errorRows,
+    ]);
+    exit;
+}
+
+// Phase 2: Process confirmed import with user override decisions
+elseif ($action == 'import_csv_confirmed') {
+    $csrf = $_POST['csrf_token'] ?? '';
+    if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
+    if (empty($_SESSION['csv_preview'])) {
+        echo json_encode(['error' => 'Preview data expired. Please upload again.']); exit;
+    }
+
+    $preview = $_SESSION['csv_preview'];
+    unset($_SESSION['csv_preview']);
+
+    // Rows the user chose to override (update existing DB records)
+    $overrideRows = array_map('intval', json_decode($_POST['override_rows'] ?? '[]', true) ?: []);
+    // Rows to skip (neither insert nor override)
+    $skipRows = array_map('intval', json_decode($_POST['skip_rows'] ?? '[]', true) ?: []);
+
+    // Preload creator
+    $creatorStmt = $pdo->prepare("SELECT p.id FROM personnels p JOIN users u ON p.id = u.personnel_id WHERE u.id = ?");
+    $creatorStmt->execute([$_SESSION['user_id']]);
+    $creatorResult = $creatorStmt->fetch(PDO::FETCH_ASSOC);
+    $createdBy = $creatorResult ? $creatorResult['id'] : 1;
+
+    $inserted = 0;
+    $updated = 0;
+    $skipped = 0;
+    $errors = [];
+
+    // Process new (valid) rows — always insert
+    foreach ($preview['valid'] as $item) {
+        $d = $item['data'];
+        try {
+            $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, ap_site_code, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
+            $stmt->execute([$d['project'],$d['location'],$d['site'],$d['apSiteCode'],$d['isp'],$d['status'],$d['province'],$d['municipality'],$createdBy]);
+            $inserted++;
+        } catch (PDOException $e) {
+            $errors[] = "Row {$item['row']}: DB insert error";
+        }
+    }
+
+    // Process duplicate rows based on user decisions
+    foreach ($preview['duplicates'] as $item) {
+        $rowNum = $item['row'];
+        if (in_array($rowNum, $skipRows)) {
+            $skipped++;
+            continue;
+        }
+        if (in_array($rowNum, $overrideRows)) {
+            $d = $item['data'];
+            $existingId = $item['existing']['id'];
+            try {
+                $stmt = $pdo->prepare("UPDATE sites SET isp=?, status=?, project_name=?, location_name=?, site_name=?, ap_site_code=?, province=?, municipality=? WHERE id=?");
+                $stmt->execute([$d['isp'],$d['status'],$d['project'],$d['location'],$d['site'],$d['apSiteCode'],$d['province'],$d['municipality'],$existingId]);
+                $updated++;
+            } catch (PDOException $e) {
+                $errors[] = "Row $rowNum: DB update error";
+            }
+        } else {
+            $skipped++;
+        }
+    }
+
+    // Validation errors are always skipped
+    $skipped += count($preview['errors']);
+
+    echo json_encode([
+        'inserted' => $inserted,
+        'updated' => $updated,
+        'skipped' => $skipped,
+        'errors' => $errors,
+    ]);
     exit;
 }
 
@@ -678,7 +760,7 @@ $totalPages = ceil($totalSites / $perPage);
         </a>
             <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
                 <li><a class="dropdown-item" href="ticket_report.php">Ticket Report</a></li>
-                <li><a class="dropdown-item" href="#"></a></li> 
+                <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
             </ul>
         </li>
         
@@ -1164,41 +1246,164 @@ $totalPages = ceil($totalSites / $perPage);
     fetch('site.php',{method:'POST',body:fd}).then(r=>r.text()).then(res=>{if(res.trim()==='success'){showAlert('Deleted','success');setTimeout(()=>location.reload(),1500);}else{showAlert(res,'error');}});
   }
 
+  let importPreviewData = null; // stores preview response for confirmImport
+
   function loadImportForm() {
     showPanel();
-    const html=`<div class="card"><div class="card-header bg-secondary text-white d-flex justify-content-between"><h5 class="mb-0">Import Sites CSV</h5><button class="btn-close btn-close-white" onclick="closePanel()"></button></div><div class="card-body"><form id="importForm" onsubmit="importCsv(event)"><div class="mb-3"><a href="site.php?action=download_template">Download template</a></div><div class="mb-3"><input type="file" name="csv_file" class="form-control" accept=".csv" required></div><input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>"><button type="submit" class="btn btn-primary w-100">Upload</button></form></div></div>`;
+    const html=`<div class="card"><div class="card-header bg-secondary text-white d-flex justify-content-between"><h5 class="mb-0">Import Sites CSV</h5><button class="btn-close btn-close-white" onclick="closePanel()"></button></div><div class="card-body"><form id="importForm" onsubmit="previewImport(event)"><div class="mb-3"><a href="site.php?action=download_template">Download template</a></div><div class="mb-3"><input type="file" name="csv_file" class="form-control" accept=".csv" required></div><div class="mb-2 small text-muted">The CSV will be previewed first. You can choose to override or skip duplicates before importing.</div><input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(generateCSRFToken()); ?>"><button type="submit" class="btn btn-primary w-100">Preview Import</button></form></div></div>`;
     document.getElementById('sidePanelContent').innerHTML=html;
   }
 
-  function importCsv(evt) {
+  function previewImport(evt) {
     evt.preventDefault();
-    const fd=new FormData(evt.target);fd.append('action','import_csv');
-    fetch('site.php',{method:'POST',body:fd}).then(r=>r.json()).then(data=>{
-      if (data.inserted!==undefined) {
-          let summary = `Imported ${data.inserted} rows`;
-          if (Array.isArray(data.errors) && data.errors.length) {
-              // count error types
-              let dup=0, inval=0, other=0;
-              data.errors.forEach(e=>{
-                  if (/duplicate/i.test(e)) dup++;
-                  else if (/invalid/i.test(e)) inval++;
-                  else other++;
-              });
-              const parts=[];
-              if (dup) parts.push(`${dup} duplicate${dup>1?'s':''}`);
-              if (inval) parts.push(`${inval} invalid${inval>1?' rows':''}`);
-              if (other) parts.push(`${other} error${other>1?'s':''}`);
-              summary += `. Skipped ${parts.join(', ')}`;
-          }
-          showAlert(summary, 'success');
-          closePanel();
-          setTimeout(()=>location.reload(),1500);
-      } else {
-          showAlert('Import failed','error');
-      }
+    const fd = new FormData(evt.target);
+    fd.append('action', 'preview_csv');
+    fetch('site.php', {method:'POST', body:fd}).then(r=>r.json()).then(data=>{
+      if (data.error) { showAlert(data.error, 'error'); return; }
+      importPreviewData = data;
+      showImportPreview(data);
     }).catch(err=>{
-      console.error('Import request failed',err);
-      showAlert('Import request failed','error');
+      console.error('Preview failed', err);
+      showAlert('Preview request failed', 'error');
+    });
+  }
+
+  function showImportPreview(data) {
+    const total = data.valid.length + data.duplicates.length + data.errors.length;
+    let html = `<div class="card">
+      <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Import Preview (${total} rows)</h5>
+        <button class="btn-close btn-close-white" onclick="closePanel()"></button>
+      </div>
+      <div class="card-body" style="max-height:70vh;overflow-y:auto;">`;
+
+    // Summary
+    html += `<div class="mb-3 d-flex gap-3 flex-wrap">
+      <span class="badge bg-success fs-6">${data.valid.length} New</span>
+      <span class="badge bg-warning text-dark fs-6">${data.duplicates.length} Duplicate${data.duplicates.length!==1?'s':''}</span>
+      <span class="badge bg-danger fs-6">${data.errors.length} Error${data.errors.length!==1?'s':''}</span>
+    </div>`;
+
+    // Error rows
+    if (data.errors.length > 0) {
+      html += `<div class="alert alert-danger py-2"><strong>Skipped (validation errors):</strong><ul class="mb-0 mt-1">`;
+      data.errors.forEach(e => {
+        html += `<li>Row ${e.row}: ${e.reason}</li>`;
+      });
+      html += `</ul></div>`;
+    }
+
+    // Valid rows preview
+    if (data.valid.length > 0) {
+      html += `<h6 class="text-success">New rows to insert:</h6>`;
+      html += `<div class="table-responsive mb-3"><table class="table table-sm table-bordered table-striped"><thead class="table-light"><tr><th>#</th><th>Project</th><th>Location</th><th>Site Name</th><th>AP Code</th><th>ISP</th><th>Status</th><th>Province</th><th>Municipality</th></tr></thead><tbody>`;
+      data.valid.forEach(item => {
+        const d = item.data;
+        html += `<tr><td>${item.row}</td><td>${esc(d.project)}</td><td>${esc(d.location)}</td><td>${esc(d.site)}</td><td>${esc(d.apSiteCode)}</td><td>${esc(d.isp)}</td><td>${esc(d.status)}</td><td>${esc(d.province)}</td><td>${esc(d.municipality)}</td></tr>`;
+      });
+      html += `</tbody></table></div>`;
+    }
+
+    // Duplicate rows with comparison
+    if (data.duplicates.length > 0) {
+      html += `<h6 class="text-warning">Duplicate rows — review and choose action:</h6>`;
+      html += `<div class="form-check mb-2"><input class="form-check-input" type="checkbox" id="selectAllOverrides" onchange="toggleAllOverrides(this)"><label class="form-check-label fw-bold" for="selectAllOverrides">Override all duplicates</label></div>`;
+
+      data.duplicates.forEach(item => {
+        const d = item.data;
+        const e = item.existing;
+        // Find fields that differ
+        const diffs = [];
+        if (d.isp !== e.isp) diffs.push('isp');
+        if (d.status !== e.status) diffs.push('status');
+        if (d.province !== e.province) diffs.push('province');
+        if (d.municipality !== e.municipality) diffs.push('municipality');
+        if (d.project !== e.project_name) diffs.push('project_name');
+        if (d.location !== e.location_name) diffs.push('location_name');
+        if (d.site !== e.site_name) diffs.push('site_name');
+        if (d.apSiteCode !== e.ap_site_code) diffs.push('ap_site_code');
+
+        const hasChanges = diffs.length > 0;
+        const diffBadge = hasChanges
+          ? `<span class="badge bg-info ms-1">${diffs.length} field${diffs.length>1?'s':''} differ</span>`
+          : `<span class="badge bg-secondary ms-1">Identical</span>`;
+
+        html += `<div class="card mb-2 border-warning">
+          <div class="card-header py-2 d-flex align-items-center" style="background:#fff8e1;">
+            <input class="form-check-input me-2 dup-override-cb" type="checkbox" data-row="${item.row}" ${hasChanges ? '' : 'disabled'}>
+            <strong class="me-2">Row ${item.row}</strong>${diffBadge}
+            <span class="ms-auto small text-muted">DB ID: ${e.id}</span>
+          </div>
+          <div class="card-body p-2">
+            <div class="table-responsive">
+              <table class="table table-sm table-bordered mb-0" style="font-size:0.82rem;">
+                <thead class="table-light"><tr><th>Field</th><th class="text-success">CSV (New)</th><th>DB (Existing)</th><th>Match</th></tr></thead>
+                <tbody>
+                  <tr${d.project!==e.project_name?' class="table-warning"':''}><td>Project</td><td>${esc(d.project)}</td><td>${esc(e.project_name)}</td><td>${d.project===e.project_name?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.location!==e.location_name?' class="table-warning"':''}><td>Location</td><td>${esc(d.location)}</td><td>${esc(e.location_name)}</td><td>${d.location===e.location_name?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.site!==e.site_name?' class="table-warning"':''}><td>Site Name</td><td>${esc(d.site)}</td><td>${esc(e.site_name)}</td><td>${d.site===e.site_name?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.apSiteCode!==e.ap_site_code?' class="table-warning"':''}><td>AP Code</td><td>${esc(d.apSiteCode)}</td><td>${esc(e.ap_site_code)}</td><td>${d.apSiteCode===e.ap_site_code?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.isp!==e.isp?' class="table-warning"':''}><td>ISP</td><td>${esc(d.isp)}</td><td>${esc(e.isp)}</td><td>${d.isp===e.isp?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.status!==e.status?' class="table-warning"':''}><td>Status</td><td>${esc(d.status)}</td><td>${esc(e.status)}</td><td>${d.status===e.status?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.province!==e.province?' class="table-warning"':''}><td>Province</td><td>${esc(d.province)}</td><td>${esc(e.province)}</td><td>${d.province===e.province?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                  <tr${d.municipality!==e.municipality?' class="table-warning"':''}><td>Municipality</td><td>${esc(d.municipality)}</td><td>${esc(e.municipality)}</td><td>${d.municipality===e.municipality?'<i class="bi bi-check-circle text-success"></i>':'<i class="bi bi-x-circle text-danger"></i>'}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>`;
+      });
+    }
+
+    // Action buttons
+    html += `<div class="d-flex gap-2 mt-3">
+      <button class="btn btn-success flex-fill" onclick="confirmImport()" ${data.valid.length === 0 && data.duplicates.length === 0 ? 'disabled' : ''}>
+        <i class="bi bi-upload"></i> Import
+        ${data.valid.length > 0 ? `(${data.valid.length} new` : '('}${data.duplicates.length > 0 ? ` + overrides` : ''})
+      </button>
+      <button class="btn btn-secondary" onclick="closePanel()">Cancel</button>
+    </div>`;
+
+    html += `</div></div>`;
+    document.getElementById('sidePanelContent').innerHTML = html;
+  }
+
+  function esc(str) {
+    const d = document.createElement('div');
+    d.textContent = str || '';
+    return d.innerHTML;
+  }
+
+  function toggleAllOverrides(el) {
+    document.querySelectorAll('.dup-override-cb:not(:disabled)').forEach(cb => { cb.checked = el.checked; });
+  }
+
+  function confirmImport() {
+    if (!importPreviewData) return;
+    const overrideRowNums = Array.from(document.querySelectorAll('.dup-override-cb:checked')).map(cb => parseInt(cb.dataset.row));
+    const allDupRows = importPreviewData.duplicates.map(d => d.row);
+    const skipRowNums = allDupRows.filter(r => !overrideRowNums.includes(r));
+
+    const fd = new FormData();
+    fd.append('action', 'import_csv_confirmed');
+    fd.append('csrf_token', '<?php echo htmlspecialchars(generateCSRFToken()); ?>');
+    fd.append('override_rows', JSON.stringify(overrideRowNums));
+    fd.append('skip_rows', JSON.stringify(skipRowNums));
+
+    fetch('site.php', {method:'POST', body:fd}).then(r=>r.json()).then(data=>{
+      if (data.error) { showAlert(data.error, 'error'); return; }
+      let summary = '';
+      if (data.inserted > 0) summary += `${data.inserted} inserted`;
+      if (data.updated > 0) summary += (summary ? ', ' : '') + `${data.updated} updated`;
+      if (data.skipped > 0) summary += (summary ? ', ' : '') + `${data.skipped} skipped`;
+      if (data.errors && data.errors.length > 0) summary += (summary ? '. ' : '') + `${data.errors.length} error(s)`;
+      if (!summary) summary = 'Import completed';
+      showAlert(summary, 'success');
+      closePanel();
+      setTimeout(()=>location.reload(), 1500);
+    }).catch(err=>{
+      console.error('Import failed', err);
+      showAlert('Import request failed', 'error');
     });
   }
 

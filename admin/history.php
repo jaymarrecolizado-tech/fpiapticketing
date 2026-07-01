@@ -103,7 +103,7 @@ if (isset($_GET['export'])) {
       </a>
       <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
       <li><a class="dropdown-item" href="ticket_report.php">Ticket Report</a></li>
-      <li><a class="dropdown-item" href="#"></a></li>
+      <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
       </ul>
     </li>
 
