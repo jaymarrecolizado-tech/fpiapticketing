@@ -5,11 +5,7 @@ require '../lib/Validator.php';
 require '../lib/Sanitizer.php';
 require '../notif/notification.php';
 
-// enforce user login
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ../index.php');
-    exit;
-}
+requireLogin();
 
 // Get current user's personnel_id for ownership filtering
 $stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");

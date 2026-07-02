@@ -4,6 +4,8 @@ require '../config/auth.php';
 require '../lib/DataExport.php';
 require '../lib/Logger.php';
 
+requireAdmin();
+
 // Initialize components
 $logger = new Logger($pdo);
 $exporter = new DataExport($pdo, $logger);

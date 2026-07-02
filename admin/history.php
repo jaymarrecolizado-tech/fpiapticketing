@@ -4,11 +4,7 @@ require_once '../config/auth.php';
 require_once '../lib/TicketHistory.php';
 require_once '../lib/HistoryExport.php';
 
-// Authentication check
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
-    header("Location: ../index.php");
-    exit;
-}
+requireAdmin();
 
 $history = new TicketHistory($pdo);
 $filters = [

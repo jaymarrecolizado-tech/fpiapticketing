@@ -3,6 +3,8 @@ require_once '../config/db.php';
 require_once '../config/auth.php';
 require_once '../config/security_headers.php';
 
+requireAdmin();
+
 function buildWhereClause($filters, &$params = []) {
     $clauses = [];
     if (!empty($filters['status'])) {
