@@ -1,0 +1,9 @@
+{
+    "require": {
+        "mpdf/mpdf": "^8.2"
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "process-timeout": 300
+    }
+}
