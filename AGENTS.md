@@ -16,6 +16,9 @@ FPIAP-SMARTs (Free Public Internet Access Program - Service Management and Respo
 
 ```
 cagayansite_tickets/
+├── ROADMAP.md                # Phased feature implementation plan
+├── DEPLOYMENT.md             # VPS deployment guide
+├── AGENTS.md                 # This file
 ├── index.php                 # Login page (entry point)
 ├── logout.php                # Session destruction
 ├── includes/                 # Shared PHP includes
