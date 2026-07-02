@@ -7,6 +7,23 @@ require '../lib/Logger.php';
 
 requireLogin();
 
+// Date range filter from URL
+$dateFrom = !empty($_GET['date_from']) ? preg_replace('/[^0-9\-]/', '', $_GET['date_from']) : '';
+$dateTo = !empty($_GET['date_to']) ? preg_replace('/[^0-9\-]/', '', $_GET['date_to']) : '';
+$hasDateFilter = ($dateFrom || $dateTo);
+
+// Build date filter SQL
+$dateFilterSql = '';
+$dateFilterParams = [];
+if ($dateFrom) {
+    $dateFilterSql .= ' AND t.created_at >= ?';
+    $dateFilterParams[] = $dateFrom . ' 00:00:00';
+}
+if ($dateTo) {
+    $dateFilterSql .= ' AND t.created_at <= ?';
+    $dateFilterParams[] = $dateTo . ' 23:59:59';
+}
+
 // Get current user's personnel_id
 $stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
@@ -21,7 +38,7 @@ $personnelId = $user['personnel_id'];
 $logger = new Logger($pdo);
 autoCloseResolvedTickets($pdo, $logger);
 
-// Fetch personal ticket stats
+// Fetch personal ticket stats (with date filter)
 $stmt = $pdo->prepare("
     SELECT
         COUNT(*) as total,
@@ -31,22 +48,24 @@ $stmt = $pdo->prepare("
         SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) as closed_count,
         SUM(CASE WHEN (status='OPEN' OR status='IN_PROGRESS')
              AND (duration >= 4320 OR (duration IS NULL AND DATEDIFF(NOW(), created_at) >= 3)) THEN 1 ELSE 0 END) as aging_count
-    FROM tickets WHERE created_by = ?
+    FROM tickets t WHERE t.created_by = ? {$dateFilterSql}
 ");
-$stmt->execute([$personnelId]);
+$statsParams = array_merge([$personnelId], $dateFilterParams);
+$stmt->execute($statsParams);
 $stats = $stmt->fetch(PDO::FETCH_ASSOC);
 
-// Recent tickets (last 5)
+// Recent tickets (with date filter, last 10)
 $stmt = $pdo->prepare("
     SELECT t.id, t.ticket_number, t.subject, t.status, t.priority, t.created_at, t.duration, t.solved_date,
            s.site_name
     FROM tickets t
     LEFT JOIN sites s ON t.site_id = s.id
-    WHERE t.created_by = ?
+    WHERE t.created_by = ? {$dateFilterSql}
     ORDER BY t.created_at DESC
-    LIMIT 5
+    LIMIT 10
 ");
-$stmt->execute([$personnelId]);
+$recentParams = array_merge([$personnelId], $dateFilterParams);
+$stmt->execute($recentParams);
 $recentTickets = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $activePage = 'dashboard';
@@ -60,6 +79,46 @@ $activePage = 'dashboard';
             <p class="text-muted">Overview of your tickets</p>
         </div>
     </div>
+
+    <!-- Date Range Filter -->
+    <div class="card shadow-sm border-0 mb-4">
+        <div class="card-body py-2">
+            <form id="dateFilterForm" class="row g-2 align-items-end">
+                <div class="col-auto">
+                    <label class="form-label small text-muted mb-0">Date Range</label>
+                    <div class="input-group input-group-sm">
+                        <span class="input-group-text"><i class="bi bi-calendar"></i></span>
+                        <input type="date" id="filterDateFrom" class="form-control" value="<?php echo htmlspecialchars($dateFrom); ?>" style="max-width: 160px;">
+                        <span class="input-group-text">to</span>
+                        <input type="date" id="filterDateTo" class="form-control" value="<?php echo htmlspecialchars($dateTo); ?>" style="max-width: 160px;">
+                    </div>
+                </div>
+                <div class="col-auto">
+                    <button type="button" class="btn btn-sm btn-primary" onclick="applyDateRange()"><i class="bi bi-search"></i> Filter</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearDateRange()"><i class="bi bi-x-circle"></i> Clear</button>
+                </div>
+                <div class="col-auto">
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('today')">Today</button>
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('last7days')">7D</button>
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('last30days')">30D</button>
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('thisMonth')">This Month</button>
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('lastMonth')">Last Month</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <?php if ($hasDateFilter): ?>
+    <div class="mb-3">
+        <small class="text-muted">
+            <i class="bi bi-funnel"></i> Filtered:
+            <?php if ($dateFrom): ?>From <strong><?php echo htmlspecialchars($dateFrom); ?></strong><?php endif; ?>
+            <?php if ($dateTo): ?> To <strong><?php echo htmlspecialchars($dateTo); ?></strong><?php endif; ?>
+        </small>
+    </div>
+    <?php endif; ?>
 
     <!-- Stats Cards -->
     <div class="row g-3 mb-4">
@@ -180,5 +239,56 @@ $activePage = 'dashboard';
         </div>
     </div>
 </div>
+
+<script>
+function applyDateRange() {
+    const from = document.getElementById('filterDateFrom').value;
+    const to = document.getElementById('filterDateTo').value;
+    const params = new URLSearchParams();
+    if (from) params.set('date_from', from);
+    if (to) params.set('date_to', to);
+    window.location.href = 'dashboard.php' + (params.toString() ? '?' + params.toString() : '');
+}
+
+function clearDateRange() {
+    window.location.href = 'dashboard.php';
+}
+
+function setDateRange(preset) {
+    const today = new Date();
+    let from = '', to = '';
+    const fmt = d => d.toISOString().slice(0, 10);
+    switch (preset) {
+        case 'today':
+            from = to = fmt(today);
+            break;
+        case 'last7days':
+            const d7 = new Date(today);
+            d7.setDate(d7.getDate() - 6);
+            from = fmt(d7);
+            to = fmt(today);
+            break;
+        case 'last30days':
+            const d30 = new Date(today);
+            d30.setDate(d30.getDate() - 29);
+            from = fmt(d30);
+            to = fmt(today);
+            break;
+        case 'thisMonth':
+            from = fmt(new Date(today.getFullYear(), today.getMonth(), 1));
+            to = fmt(today);
+            break;
+        case 'lastMonth':
+            const lm = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+            from = fmt(lm);
+            to = fmt(new Date(today.getFullYear(), today.getMonth(), 0));
+            break;
+    }
+    const params = new URLSearchParams();
+    if (from) params.set('date_from', from);
+    if (to) params.set('date_to', to);
+    window.location.href = 'dashboard.php' + (params.toString() ? '?' + params.toString() : '');
+}
+</script>
 
 <?php require __DIR__ . '/../includes/footer.php'; ?>
