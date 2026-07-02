@@ -5,7 +5,7 @@ require '../lib/Sanitizer.php';
 require '../lib/Validator.php';
 require '../notif/notification.php';
 require '../lib/Logger.php';
-require_once '../lib/duration.php';
+require_once '../lib/Duration.php';
 require_once '../lib/TicketHistory.php';
 
 requireAdmin();

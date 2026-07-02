@@ -2,7 +2,7 @@
 require '../config/db.php';
 require '../config/auth.php';
 require '../lib/Sanitizer.php';
-require '../lib/duration.php';
+require '../lib/Duration.php';
 require '../notif/notification.php';
 
 requireLogin();

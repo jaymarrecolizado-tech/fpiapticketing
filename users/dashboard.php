@@ -1,8 +1,8 @@
 <?php
 require '../config/db.php';
 require '../config/auth.php';
-require '../lib/duration.php';
-require '../lib/auto_close.php';
+require '../lib/Duration.php';
+require '../lib/AutoClose.php';
 require '../lib/Logger.php';
 
 requireLogin();

@@ -1,8 +1,8 @@
 <?php
 require '../config/db.php';
 require '../config/auth.php';
-require '../lib/validator.php';
-require '../lib/sanitizer.php';
+require '../lib/Validator.php';
+require '../lib/Sanitizer.php';
 require '../notif/notification.php';
 
 // ===== SECURITY: Enforce admin authentication =====

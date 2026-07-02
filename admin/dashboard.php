@@ -3,7 +3,7 @@ require '../config/db.php';
 require '../config/auth.php';
 require '../lib/Sanitizer.php';
 require '../lib/Logger.php';
-require '../lib/auto_close.php';
+require '../lib/AutoClose.php';
 
 requireAdmin();
 

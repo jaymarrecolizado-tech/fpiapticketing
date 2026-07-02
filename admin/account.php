@@ -4,7 +4,7 @@ require '../config/auth.php';
 require '../lib/Sanitizer.php';
 require '../lib/Validator.php';
 require '../lib/Logger.php';
-require '../lib/auto_close.php';
+require '../lib/AutoClose.php';
 
 requireAdmin();
 

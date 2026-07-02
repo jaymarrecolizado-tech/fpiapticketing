@@ -43,7 +43,6 @@ cagayansite_tickets/
 │   ├── systemlog.php         # System audit log viewer
 │   ├── backup.php            # Backup management UI
 │   ├── data_export.php       # Data export
-│   ├── describe_table.php    # DB table inspector
 │   └── account.php           # Admin account settings
 ├── users/                    # Regular user pages (requireLogin())
 │   ├── dashboard.php         # User dashboard with personal ticket stats
@@ -65,8 +64,8 @@ cagayansite_tickets/
 │   ├── DataExport.php        # Data export functionality
 │   ├── HistoryExport.php     # History export
 │   ├── BackupManager.php     # Backup creation and management
-│   ├── duration.php          # Duration calculations
-│   └── auto_close.php        # Auto-close resolved tickets (7 days)
+│   ├── Duration.php          # Duration calculations
+│   └── AutoClose.php         # Auto-close resolved tickets (7 days)
 ├── scripts/                  # CLI/cron scripts
 │   ├── automated_backup.php  # Cron backup (full/database/filesystem)
 │   ├── auto_close_resolved_tickets.php
@@ -78,7 +77,9 @@ cagayansite_tickets/
 │   ├── add_ticket_comments.php    # Migration: creates ticket_comments table
 │   ├── add_ticket_assignment.php  # Migration: adds assigned_to column
 │   ├── add_ticket_attachments.php # Migration: creates ticket_attachments table
-│   └── add_categories_and_due_date.php # Migration: adds category, due_date columns
+│   ├── add_categories_and_due_date.php # Migration: adds category, due_date columns
+│   ├── create_ticket_counter_table.php # Migration: creates ticket_counter for numbering
+│   └── describe_table.php    # DB table inspector (dev tool)
 ├── assets/
 │   ├── js/
 │   │   └── notifications.js  # Shared notification bell JS (auto-included via footer.php)
@@ -312,8 +313,8 @@ Both importers use 8-column CSV: `project_name,location_name,site_name,ap_site_c
 - Admin: `admin@dict.gov.ph` / `Fwticket@2026!`
 
 ### VPS Case Sensitivity
-- `lib/Validator.php` and `lib/Sanitizer.php` filenames are case-sensitive on Linux
-- Always use PascalCase: `Validator.php`, `Sanitizer.php`
+- All `lib/` class files use PascalCase: `Validator.php`, `Sanitizer.php`, `AutoClose.php`, `Duration.php`, `Logger.php`, `TicketHistory.php`, etc.
+- Always use exact case in `require` statements — Linux is case-sensitive
 
 ## Known Gotchas
 

@@ -44,12 +44,8 @@ $activePage = $activePage ?? 'dashboard';
             <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li>
           </ul>
         </li>
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Sites</a>
-          <ul class="dropdown-menu">
-            <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-            <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
-          </ul>
+        <li class="nav-item">
+          <a class="nav-link" href="site.php">Sites</a>
         </li>
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">Reports</a>

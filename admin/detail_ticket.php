@@ -2,7 +2,7 @@
 require '../config/db.php';
 require '../config/auth.php';
 require '../lib/Sanitizer.php';
-require_once '../lib/duration.php';
+require_once '../lib/Duration.php';
 
 requireAdmin();
 

@@ -10,7 +10,7 @@ require '../lib/Validator.php';
 require '../lib/Sanitizer.php';
 require '../notif/notification.php';
 require '../lib/Logger.php';
-require '../lib/auto_close.php';
+require '../lib/AutoClose.php';
 require_once '../lib/TicketHistory.php';
 
 requireLogin();
