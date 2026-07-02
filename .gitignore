@@ -33,5 +33,8 @@ config/db_local.php
 # Exports
 uploads/import_export/exports/
 
+# Ticket attachments
+uploads/tickets/
+
 # Logs
 *.log

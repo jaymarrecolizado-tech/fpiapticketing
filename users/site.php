@@ -1,15 +1,11 @@
-﻿<?php
+<?php
 require '../config/db.php';
 require '../config/auth.php';
 require '../lib/Validator.php';
 require '../lib/Sanitizer.php';
 require '../notif/notification.php';
 
-// enforce user login
-if (!isset($_SESSION['user_id'])) {
-    header('Location: ../index.php');
-    exit;
-}
+requireLogin();
 
 // Get current user's personnel_id for ownership filtering
 $stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
@@ -387,60 +383,90 @@ elseif ($action == 'delete') {
 
 elseif ($action == 'import_csv') {
     $csrf = $_POST['csrf_token'] ?? '';
-    if (!validateCSRFToken($csrf)) { echo 'Error: Invalid security token.'; exit; }
+    if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
-        echo 'Error: Upload failed.'; exit;
+        echo json_encode(['error' => 'Upload failed.']); exit;
     }
+    // Validate file size (max 5MB) and type
+    $file = $_FILES['csv_file'];
+    if ($file['size'] > 5 * 1024 * 1024) {
+        echo json_encode(['error' => 'File too large (max 5MB).']); exit;
+    }
+    $ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+    if (!in_array($ext, ['csv', 'txt'])) {
+        echo json_encode(['error' => 'Only CSV and TXT files are allowed.']); exit;
+    }
+    // Max 1000 rows to prevent memory exhaustion
+    $maxRows = 1000;
     $handle = fopen($_FILES['csv_file']['tmp_name'], 'r');
     $row = 0;
     $errors = [];
     $inserted = 0;
-    // Get current user's personnel_id for CSV import
+    $skipped = 0;
+
     $creatorStmt = $pdo->prepare("SELECT p.id FROM personnels p JOIN users u ON p.id = u.personnel_id WHERE u.id = ?");
     $creatorStmt->execute([$_SESSION['user_id']]);
     $creatorResult = $creatorStmt->fetch(PDO::FETCH_ASSOC);
     $createdBy = $creatorResult ? $creatorResult['id'] : $personnelId;
-    
-    while (($data = fgetcsv($handle, 1000, ',')) !== false) {
-        $row++;
-        // skip header
-        if ($row === 1 && strcasecmp($data[0],'project_name') === 0) continue;
-        $project = trim($data[0] ?? '');
-        $location = trim($data[1] ?? '');
-        $site = trim($data[2] ?? '');
-        $isp = trim($data[3] ?? '');
-        $status = trim($data[4] ?? '');
-        $province = trim($data[5] ?? '');
-        $municipality = trim($data[6] ?? '');
-        if (!Validator::string($project,1,150) || !Validator::string($location,1,150) || !Validator::string($site,1,150) || !Validator::string($isp,1,150) || !Validator::inList($status,$statusOptions)) {
-            $errors[] = "Row $row: invalid data";
-            continue;
-        }
-        if (!Validator::string($province,1,150) || !Validator::string($municipality,1,150)) {
-            $errors[] = "Row $row: invalid province/municipality";
-            continue;
-        }
-        // duplicate detection (scoped to current user)
-        if (isDuplicateSite($project, $location, $site, $province, $municipality, null, $personnelId)) {
-            $errors[] = "Row $row: duplicate record";
-            continue;
-        }
-        try {
-            // Get creator's personnel ID for CSV import
-            $creatorStmt = $pdo->prepare("SELECT p.id FROM personnels p JOIN users u ON p.id = u.personnel_id WHERE u.id = ?");
-            $creatorStmt->execute([$_SESSION['user_id']]);
-            $creatorResult = $creatorStmt->fetch(PDO::FETCH_ASSOC);
-            $createdBy = $creatorResult ? $creatorResult['id'] : 1; // Default to 1 if not found
-            
-            $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?)");
-            $stmt->execute([$project,$location,$site,$isp,$status,$province,$municipality,$createdBy]);
+
+    $pdo->beginTransaction();
+    try {
+        while (($data = fgetcsv($handle, 1000, ',')) !== false) {
+            $row++;
+            if ($row > $maxRows) {
+                $errors[] = "Exceeded maximum rows ($maxRows). Remaining rows skipped.";
+                break;
+            }
+            // skip header
+            if ($row === 1 && strcasecmp($data[0],'project_name') === 0) continue;
+
+            $project = Sanitizer::normalize(trim($data[0] ?? ''));
+            $location = Sanitizer::normalize(trim($data[1] ?? ''));
+            $site = Sanitizer::normalize(trim($data[2] ?? ''));
+            $apSiteCode = Sanitizer::normalize(trim($data[3] ?? ''));
+            $isp = Sanitizer::normalize(trim($data[4] ?? ''));
+            $status = Sanitizer::normalize(trim($data[5] ?? ''));
+            $province = Sanitizer::normalize(trim($data[6] ?? ''));
+            $municipality = Sanitizer::normalize(trim($data[7] ?? ''));
+
+            // Validate fields
+            $fieldErrors = [];
+            if (!Validator::string($project,1,150)) $fieldErrors[] = 'project_name';
+            if (!Validator::string($location,1,150)) $fieldErrors[] = 'location_name';
+            if (!Validator::string($site,1,150)) $fieldErrors[] = 'site_name';
+            if (!empty($apSiteCode) && !Validator::string($apSiteCode,1,50)) $fieldErrors[] = 'ap_site_code';
+            if (!Validator::string($isp,1,150)) $fieldErrors[] = 'isp';
+            if (!Validator::inList($status,$statusOptions)) $fieldErrors[] = 'status (invalid value: '.htmlspecialchars($status).')';
+            if (!Validator::string($province,1,150)) $fieldErrors[] = 'province';
+            if (!Validator::string($municipality,1,150)) $fieldErrors[] = 'municipality';
+
+            if (!empty($fieldErrors)) {
+                $errors[] = "Row $row: invalid " . implode(', ', $fieldErrors);
+                $skipped++;
+                continue;
+            }
+
+            $status = strtoupper($status);
+
+            // duplicate detection (scoped to current user, includes ap_site_code)
+            if (isDuplicateSite($project, $location, $site, $apSiteCode, $province, $municipality, null, $personnelId)) {
+                $errors[] = "Row $row: duplicate ({$site} in {$municipality})";
+                $skipped++;
+                continue;
+            }
+
+            $stmt = $pdo->prepare("INSERT INTO sites (project_name, location_name, site_name, ap_site_code, isp, status, province, municipality, created_by) VALUES (?,?,?,?,?,?,?,?,?)");
+            $stmt->execute([$project,$location,$site,$apSiteCode,$isp,$status,$province,$municipality,$createdBy]);
             $inserted++;
-        } catch (PDOException $e) {
-            $errors[] = "Row $row: db error";
         }
+        fclose($handle);
+        $pdo->commit();
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        error_log('CSV import error: '.$e->getMessage());
+        $errors[] = "Database error during import. Changes rolled back.";
     }
-    fclose($handle);
-    echo json_encode(['inserted'=>$inserted,'errors'=>$errors]);
+    echo json_encode(['inserted'=>$inserted, 'skipped'=>$skipped, 'errors'=>$errors]);
     exit;
 }
 
@@ -620,99 +646,8 @@ $totalSites = $countStmt->fetchColumn();
 $totalPages = ceil($totalSites / $perPage);
 
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
-
-  <title>FPIAP-Service Management and Response Ticketing System</title>
-</head>
-<body class="d-flex flex-column min-vh-100">
-
-<nav class="navbar sticky-top navbar-expand-lg navbar-light shadow-sm" style="background-color: #0ef;">
-  <div class="container-fluid">
-
-    <a class="navbar-brand d-flex align-items-center" href="dashboard.php">
-      <img src="../assets/freewifilogo.png" alt="Logo" width="100" height="100" class="me-2">
-      <img src="../assets/FPIAP-SMARTs.png" alt="Logo" width="100" height="100" class="me-2">
-      <div class="d-flex flex-column ms-0">
-        <span class="fw-bold">FPIAP-SMARTs</span>
-      </div>
-    </a>
-
-  <hr class="mx-0 my-2 opacity-25">
-
-  <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-    <span class="navbar-toggler-icon"></span>
-  </button>
-
-  <!-- Navigation Links -->
-  <div class="collapse navbar-collapse" id="mainNavbar">
-    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-
-    <li class="nav-item">
-      <a class="nav-link" href="dashboard.php">Dashboard</a>
-    </li>
-
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Tickets
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="view_tickets.php">View Tickets</a></li>
-      <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li> 
-      </ul>
-    </li>
-
-    <li class="nav-item dropdown">
-      <a class="nav-link active dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Sites
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-      </ul>
-    </li>
-
-    <li class="nav-item">
-      <a class="nav-link" href="#">Reports</a>
-    </li>
-        
-    </ul>
-
-    <!-- Right Icons -->
-    <ul class="navbar-nav ms-auto align-items-center">
-
-    <!-- Notification Bell -->
-    <li class="nav-item dropdown me-3">
-          <a id="notificationBell" class="nav-link position-relative dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-bell fs-5"></i>
-            <span id="notificationBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger visually-hidden">0</span>
-          </a>
-          <ul id="notificationDropdown" class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell">
-            <li class="dropdown-item text-center text-muted small">Loading...</li>
-          </ul>
-    </li>
-
-    <!-- Profile Dropdown -->
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown">
-      <i class="bi bi-person-circle fs-4 me-1"></i>
-      </a>
-      <ul class="dropdown-menu dropdown-menu-end">
-      <li><a class="dropdown-item" href="#">My Account</a></li>
-      <li><hr class="dropdown-divider"></li>
-      <li><a class="dropdown-item text-danger" href="../logout.php">Logout</a></li>
-      </ul>
-    </li>
-
-    </ul>
-  </div>
-  </div>
-</nav>
+<?php $activePage = 'sites'; ?>
+<?php require __DIR__ . '/../includes/user_header.php'; ?>
 
 <div class="container-fluid mt-4">
   <div class="row">
@@ -1064,12 +999,6 @@ $totalPages = ceil($totalSites / $perPage);
     tooltipTriggerList.map(function (tooltipTriggerEl) {
       return new bootstrap.Tooltip(tooltipTriggerEl);
     });
-    fetchNotifications();
-    setInterval(fetchNotifications, 60000);
-    const bellToggle = document.getElementById('notificationBell');
-    if (bellToggle) {
-      bellToggle.addEventListener('show.bs.dropdown', fetchNotifications);
-    }
     // Initialize filter badges
     updateFilterBadges();
   });
@@ -1383,44 +1312,6 @@ $totalPages = ceil($totalSites / $perPage);
     window.location.href = `site.php?${searchParam}${filterParamStr}sort=${column}&dir=${newDir}&page=1&per_page=${perPage}`;
   }
 
-  async function fetchNotifications(){
-    const drop = document.getElementById('notificationDropdown');
-    const badge = document.getElementById('notificationBadge');
-    if (!drop) return;
-    try {
-      const resp = await fetch('notification.php', { method: 'GET', cache: 'no-cache' });
-      const html = await resp.text();
-      drop.innerHTML = html;
-      
-      // Attach click handlers to notification items
-      drop.querySelectorAll('.notification-item').forEach(item => {
-        item.addEventListener('click', function(e) {
-          const notificationId = this.getAttribute('data-notification-id');
-          if (notificationId) {
-            fetch('../notif/api.php', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-              body: 'action=mark_read&notification_id=' + notificationId
-            }).catch(err => console.error('Failed to mark notification as read:', err));
-            this.classList.remove('unread');
-          }
-        });
-      });
-      
-      const unread = drop.querySelectorAll('.notification-item.unread, li[data-unread="1"]').length;
-      if (unread > 0) {
-        badge.textContent = unread;
-        badge.classList.remove('visually-hidden');
-      } else {
-        badge.classList.add('visually-hidden');
-      }
-    } catch (e) {
-      drop.innerHTML = '<li class="dropdown-item text-danger small">Error loading notifications</li>';
-      if (badge) badge.classList.add('visually-hidden');
-      console.error(e);
-    }
-  }
-
   // location helpers
   const locData = <?php echo json_encode($allLocations); ?>;
   // derive unique province list from locData for paging
@@ -1705,5 +1596,4 @@ $totalPages = ceil($totalSites / $perPage);
   }
 
 </script>
-</body>
-</html>
+<?php require __DIR__ . '/../includes/footer.php'; ?>

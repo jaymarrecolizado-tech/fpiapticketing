@@ -13,7 +13,7 @@ require '../lib/Validator.php';
 require '../lib/Sanitizer.php';
 require '../notif/notification.php';
 require '../lib/Logger.php';
-require '../lib/auto_close.php';
+require '../lib/AutoClose.php';
 require_once '../lib/TicketHistory.php';
 
 $action = $_POST['action'] ?? '';
@@ -61,6 +61,9 @@ if ($action == 'create_tickets') {
         $subject = $_POST['subject'] ?? '';
     $status = $_POST['status'] ?? 'OPEN';
     $notes = $_POST['notes'] ?? '';
+    $priority = $_POST['priority'] ?? 'medium';
+    $category = $_POST['category'] ?? '';
+    $dueDate = $_POST['due_date'] ?? '';
     // use the personnel ID stored in session for ownership (matches tickets.created_by FK)
     $createdBy = $_SESSION['personnel_id'] ?? $_SESSION['user_id'] ?? $_SESSION['id'] ?? 1;
 
@@ -68,6 +71,9 @@ if ($action == 'create_tickets') {
     $subject = Sanitizer::normalize($subject);
     $status = Sanitizer::normalize($status);
     $notes = Sanitizer::remarks($notes);
+    $priority = Sanitizer::normalize($priority);
+    $category = Sanitizer::normalize($category);
+    $dueDate = !empty($dueDate) ? $dueDate : null;
 
     // Validate required fields
     if (empty($siteIds) || !Validator::subject($subject)) {
@@ -79,6 +85,12 @@ if ($action == 'create_tickets') {
     if (!empty($notes) && !Validator::remarks($notes)) {
         echo json_encode(['success' => false, 'message' => 'Notes exceed maximum length (2000 characters)']);
         exit;
+    }
+
+    // Validate priority
+    $validPriorities = ['low', 'medium', 'high', 'critical'];
+    if (!Validator::inList($priority, $validPriorities)) {
+        $priority = 'medium';
     }
 
     // Validate status
@@ -122,14 +134,17 @@ if ($action == 'create_tickets') {
                 $ticketNumber = sprintf('F-SMART-%d-%04d', $year, $counter);
 
                 // Insert ticket
-                $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, notes, created_by, created_at, updated_at, solved_date) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), NULL)");
+                $insertStmt = $pdo->prepare("INSERT INTO tickets (ticket_number, site_id, subject, status, priority, category, notes, created_by, created_at, updated_at, solved_date, due_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), NULL, ?)");
                 $insertStmt->execute([
                     $ticketNumber,
                     $siteId,
                     $subject,
                     $status,
+                    $priority,
+                    $category ?: null,
                     $notes,
-                    $createdBy
+                    $createdBy,
+                    $dueDate
                 ]);
 
                 $ticketId = $pdo->lastInsertId();
@@ -328,129 +343,8 @@ if ($action == 'auto_close_resolved') {
 requireAdmin();
 
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
-
-  <title>FPIAP-Service Management and Response Ticketing System</title>
-</head>
-<body class="d-flex flex-column min-vh-100">
-
-<nav class="navbar sticky-top navbar-expand-lg navbar-light shadow-sm" style="background-color: #0ef;">
-  <div class="container-fluid">
-
-    <a class="navbar-brand d-flex align-items-center" href="dashboard.php">
-      <img src="../assets/freewifilogo.png" alt="Logo" width="100" height="100" class="me-2">
-      <img src="../assets/FPIAP-SMARTs.png" alt="Logo" width="100" height="100" class="me-2">
-      <div class="d-flex flex-column ms-0">
-        <span class="fw-bold">FPIAP-SMARTs</span>
-        <span class="fw-bold small align-self-center">ADMIN PANEL</span>
-      </div>
-    </a>
-
-  <hr class="mx-0 my-2 opacity-25">
-
-  <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-    <span class="navbar-toggler-icon"></span>
-  </button>
-
-  <!-- Navigation Links -->
-  <div class="collapse navbar-collapse" id="mainNavbar">
-    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-
-    <li class="nav-item">
-      <a class="nav-link" href="dashboard.php">Dashboard</a>
-    </li>
-
-    <li class="nav-item dropdown">
-      <a class="nav-link active dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Tickets
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="viewtickets.php">View Tickets</a></li>
-      <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li> 
-      </ul>
-    </li>
-
-
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Sites
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-      <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li> 
-      </ul>
-    </li>
-
-        <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-        Reports
-        </a>
-            <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-                <li><a class="dropdown-item" href="ticket_report.php">Ticket Report</a></li>
-                <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
-            </ul>
-        </li>
-        
-
-    <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-            Setting
-        </a>
-        <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-        <li><a class="dropdown-item" href="personnel.php">Personnels</a></li>
-        <li><a class="dropdown-item" href="user.php">User's Management</a></li>
-        <li><a class="dropdown-item" href="systemlog.php">System Log</a></li>
-        <li><a class="dropdown-item" href="backup.php">Backup Management</a></li>
-        <li><a class="dropdown-item" href="data_export.php">Data Export</a></li>
-        <li><a class="dropdown-item" href="history.php">History</a></li>
-        </ul>
-    </li>
-        
-    </ul>
-
-    <!-- Right Icons -->
-    <ul class="navbar-nav ms-auto align-items-center">
-
-    
-
-    <!-- Notification Bell -->
-    <li class="nav-item dropdown me-3">
-          <a id="notificationBell" class="nav-link position-relative dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-bell fs-5"></i>
-            <span id="notificationBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger visually-hidden">0</span>
-          </a>
-          <ul id="notificationDropdown" class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell">
-            <li class="dropdown-item text-center text-muted small">Loading...</li>
-          </ul>
-    </li>
-
-    <!-- Account Name Display -->
-    <li class="nav-item d-flex align-items-center me-3">
-      <div class="d-flex flex-column text-end">
-        <span class="fw-semibold text-dark small"><?php echo htmlspecialchars($_SESSION['username'] ?? 'Unknown User'); ?></span>
-      </div>
-    </li>
-
-    <!-- Profile Dropdown -->
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown">
-      <i class="bi bi-person-circle fs-4 me-1"></i>
-      </a>
-      <ul class="dropdown-menu dropdown-menu-end">
-      <li><a class="dropdown-item" href="account.php">My Account</a></li>
-      <li><hr class="dropdown-divider"></li>
-      <li><a class="dropdown-item text-danger" href="../logout.php">Logout</a></li>
-      </ul>
-    </li>
-
-    </ul>
-  </div>
-  </div>
-</nav>
+<?php $activePage = 'tickets'; ?>
+<?php require __DIR__ . '/../includes/admin_header.php'; ?>
 
 <main class="flex-grow-1 overflow-auto">
 <div class="container-fluid mt-4">
@@ -509,7 +403,38 @@ requireAdmin();
                         </div>
 
                         <hr>
-                        
+
+                        <!-- Priority -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Priority</label>
+                            <select id="priority" name="priority" class="form-select">
+                                <option value="low">Low</option>
+                                <option value="medium" selected>Medium</option>
+                                <option value="high">High</option>
+                                <option value="critical">Critical</option>
+                            </select>
+                        </div>
+
+                        <!-- Category -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Category</label>
+                            <select id="category" name="category" class="form-select">
+                                <option value="">None</option>
+                                <option value="connectivity">Connectivity</option>
+                                <option value="hardware">Hardware</option>
+                                <option value="software">Software</option>
+                                <option value="power">Power</option>
+                                <option value="security">Security</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+
+                        <!-- Due Date -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Due Date</label>
+                            <input type="datetime-local" id="due_date" name="due_date" class="form-control">
+                        </div>
+
                         <!-- Subject -->
                         <div class="mb-3">
                             <label class="form-label fw-bold">Subject <span class="text-danger">*</span></label>
@@ -599,14 +524,7 @@ requireAdmin();
 </div>
 </main>
 
-<footer class="bg-dark text-light text-center py-3 mt-auto">
-  <div class="container">
-  <small>
-    <?php echo date('Y'); ?> &copy; FREE PUBLIC INTERNET ACCESS PROGRAM - SERVICE MANAGEMENT AND RESPONSE TICKETING SYSTEM (FPIAP-SMARTs). All Rights Reserved.
-  </small>
-  </div>
-</footer>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require __DIR__ . '/../includes/footer.php'; ?>
 <script>
     // Multi-site selection array
     let selectedSites = [];
@@ -617,13 +535,6 @@ requireAdmin();
     document.addEventListener('DOMContentLoaded', function() {
         loadFilterOptions();
         initSiteAutocomplete();
-        fetchNotifications();
-        setInterval(fetchNotifications, 60000);
-
-        const bellToggle = document.getElementById('notificationBell');
-        if (bellToggle) {
-            bellToggle.addEventListener('show.bs.dropdown', fetchNotifications);
-        }
     });
 
     // Initialize site autocomplete
@@ -1005,50 +916,7 @@ requireAdmin();
         }, 3000);
     }
 
-    // Notifications
-    async function fetchNotifications() {
-        const dropdown = document.getElementById('notificationDropdown');
-        const badge = document.getElementById('notificationBadge');
-        if (!dropdown) return;
-        try {
-            const resp = await fetch('notification.php', { method: 'GET', cache: 'no-cache' });
-            if (!resp.ok) throw new Error('Network response not ok');
-            const html = await resp.text();
-            
-            if (html && html.trim().length > 0) {
-                dropdown.innerHTML = html;
-            } else {
-                dropdown.innerHTML = '<li class="dropdown-item text-center text-muted small">No notifications</li>';
-            }
 
-            // Attach click handlers to notification items
-            dropdown.querySelectorAll('.notification-item').forEach(item => {
-                item.addEventListener('click', function(e) {
-                    const notificationId = this.getAttribute('data-notification-id');
-                    if (notificationId) {
-                        fetch('../notif/api.php', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: 'action=mark_read&notification_id=' + notificationId
-                        }).catch(err => console.error('Failed to mark notification as read:', err));
-                        this.classList.remove('unread');
-                    }
-                });
-            });
-
-            const unread = dropdown.querySelectorAll('.notification-item.unread, li[data-unread="1"]').length;
-            if (unread > 0) {
-                badge.textContent = String(unread);
-                badge.classList.remove('visually-hidden');
-            } else {
-                badge.classList.add('visually-hidden');
-            }
-        } catch (err) {
-            dropdown.innerHTML = '<li class="dropdown-item text-danger small">Error loading notifications</li>';
-            if (badge) badge.classList.add('visually-hidden');
-            console.error('Failed to load notifications:', err);
-        }
-    }
 </script>
 
 </body>

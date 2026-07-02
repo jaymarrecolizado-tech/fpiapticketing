@@ -1,167 +1,184 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<?php
+require '../config/db.php';
+require '../config/auth.php';
+require '../lib/Duration.php';
+require '../lib/AutoClose.php';
+require '../lib/Logger.php';
 
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+requireLogin();
 
-  <title>FPIAP-Service Management and Response Ticketing System</title>
-</head>
-<body class="d-flex flex-column min-vh-100">
+// Get current user's personnel_id
+$stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
+$stmt->execute([$_SESSION['user_id']]);
+$user = $stmt->fetch(PDO::FETCH_ASSOC);
+if (!$user) {
+    header('Location: ../index.php');
+    exit;
+}
+$personnelId = $user['personnel_id'];
 
-<nav class="navbar sticky-top navbar-expand-lg navbar-light shadow-sm" style="background-color: #0ef;">
-  <div class="container-fluid">
+// Auto-close resolved tickets
+$logger = new Logger($pdo);
+autoCloseResolvedTickets($pdo, $logger);
 
-    <a class="navbar-brand d-flex align-items-center" href="dashboard.php">
-      <img src="../assets/freewifilogo.png" alt="Logo" width="100" height="100" class="me-2">
-      <img src="../assets/FPIAP-SMARTs.png" alt="Logo" width="100" height="100" class="me-2">
-      
-      <div class="d-flex flex-column ms-0">
-        <span class="fw-bold">FPIAP-SMARTs</span>
-      </div>
-    </a>
+// Fetch personal ticket stats
+$stmt = $pdo->prepare("
+    SELECT
+        COUNT(*) as total,
+        SUM(CASE WHEN status='OPEN' THEN 1 ELSE 0 END) as open_count,
+        SUM(CASE WHEN status='IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress_count,
+        SUM(CASE WHEN status='RESOLVED' THEN 1 ELSE 0 END) as resolved_count,
+        SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) as closed_count,
+        SUM(CASE WHEN (status='OPEN' OR status='IN_PROGRESS')
+             AND (duration >= 4320 OR (duration IS NULL AND DATEDIFF(NOW(), created_at) >= 3)) THEN 1 ELSE 0 END) as aging_count
+    FROM tickets WHERE created_by = ?
+");
+$stmt->execute([$personnelId]);
+$stats = $stmt->fetch(PDO::FETCH_ASSOC);
 
-  <hr class="mx-0 my-2 opacity-25">
+// Recent tickets (last 5)
+$stmt = $pdo->prepare("
+    SELECT t.id, t.ticket_number, t.subject, t.status, t.priority, t.created_at, t.duration, t.solved_date,
+           s.site_name
+    FROM tickets t
+    LEFT JOIN sites s ON t.site_id = s.id
+    WHERE t.created_by = ?
+    ORDER BY t.created_at DESC
+    LIMIT 5
+");
+$stmt->execute([$personnelId]);
+$recentTickets = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-  <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-    <span class="navbar-toggler-icon"></span>
-  </button>
+$activePage = 'dashboard';
+?>
+<?php require __DIR__ . '/../includes/user_header.php'; ?>
 
-  <!-- Navigation Links -->
-  <div class="collapse navbar-collapse" id="mainNavbar">
-    <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+<div class="container-fluid mt-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h1 class="h3 mb-0">My Dashboard</h1>
+            <p class="text-muted">Overview of your tickets</p>
+        </div>
+    </div>
 
-    <li class="nav-item">
-      <a class="nav-link" href="dashboard.php">Dashboard</a>
-    </li>
+    <!-- Stats Cards -->
+    <div class="row g-3 mb-4">
+        <div class="col-lg-2 col-md-4 col-6">
+            <div class="card text-center shadow-sm border-0">
+                <div class="card-body">
+                    <h3 class="mb-0"><?php echo (int)$stats['total']; ?></h3>
+                    <small class="text-muted">Total</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+            <div class="card text-center shadow-sm border-0" style="border-left: 4px solid #dc3545;">
+                <div class="card-body">
+                    <h3 class="mb-0 text-danger"><?php echo (int)$stats['open_count']; ?></h3>
+                    <small class="text-muted">Open</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+            <div class="card text-center shadow-sm border-0" style="border-left: 4px solid #ffc107;">
+                <div class="card-body">
+                    <h3 class="mb-0 text-warning"><?php echo (int)$stats['in_progress_count']; ?></h3>
+                    <small class="text-muted">In Progress</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+            <div class="card text-center shadow-sm border-0" style="border-left: 4px solid #0dcaf0;">
+                <div class="card-body">
+                    <h3 class="mb-0 text-info"><?php echo (int)$stats['resolved_count']; ?></h3>
+                    <small class="text-muted">Resolved</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+            <div class="card text-center shadow-sm border-0" style="border-left: 4px solid #198754;">
+                <div class="card-body">
+                    <h3 class="mb-0 text-success"><?php echo (int)$stats['closed_count']; ?></h3>
+                    <small class="text-muted">Closed</small>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-2 col-md-4 col-6">
+            <div class="card text-center shadow-sm border-0" style="border-left: 4px solid #6f42c1;">
+                <div class="card-body">
+                    <h3 class="mb-0 text-purple"><?php echo (int)$stats['aging_count']; ?></h3>
+                    <small class="text-muted">Aging</small>
+                </div>
+            </div>
+        </div>
+    </div>
 
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Tickets
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="view_tickets.php">View Tickets</a></li>
-      <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li> 
-      </ul>
-    </li>
+    <!-- Recent Tickets -->
+    <div class="card shadow-sm border-0">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center">
+            <h5 class="mb-0">Recent Tickets</h5>
+            <a href="view_tickets.php" class="btn btn-sm btn-outline-primary">View All</a>
+        </div>
+        <div class="card-body p-0">
+            <?php if (empty($recentTickets)): ?>
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-inbox fs-1"></i>
+                    <p class="mt-2">No tickets yet. <a href="ticket.php">Create your first ticket</a></p>
+                </div>
+            <?php else: ?>
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Ticket #</th>
+                                <th>Subject</th>
+                                <th>Site</th>
+                                <th>Status</th>
+                                <th>Priority</th>
+                                <th>Duration</th>
+                                <th>Created</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($recentTickets as $t): ?>
+                                <tr>
+                                    <td><a href="detail_ticket.php?id=<?php echo $t['id']; ?>"><?php echo htmlspecialchars($t['ticket_number']); ?></a></td>
+                                    <td><?php echo htmlspecialchars($t['subject']); ?></td>
+                                    <td><?php echo htmlspecialchars($t['site_name'] ?? 'N/A'); ?></td>
+                                    <td>
+                                        <?php
+                                        $badgeClass = match($t['status']) {
+                                            'OPEN' => 'bg-danger',
+                                            'IN_PROGRESS' => 'bg-warning text-dark',
+                                            'RESOLVED' => 'bg-info',
+                                            'CLOSED' => 'bg-success',
+                                            default => 'bg-secondary'
+                                        };
+                                        ?>
+                                        <span class="badge <?php echo $badgeClass; ?>"><?php echo $t['status']; ?></span>
+                                    </td>
+                                    <td>
+                                        <?php
+                                        $priorityClass = match($t['priority'] ?? 'medium') {
+                                            'critical' => 'bg-danger',
+                                            'high' => 'bg-warning text-dark',
+                                            'medium' => 'bg-info',
+                                            'low' => 'bg-secondary',
+                                            default => 'bg-secondary'
+                                        };
+                                        ?>
+                                        <span class="badge <?php echo $priorityClass; ?>"><?php echo ucfirst($t['priority'] ?? 'medium'); ?></span>
+                                    </td>
+                                    <td><?php echo formatDurationDisplay(calculateDurationMinutes($t['created_at'], $t['duration'], $t['status'])); ?></td>
+                                    <td><?php echo date('M d, Y', strtotime($t['created_at'])); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
 
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-      Sites
-      </a>
-      <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-      <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-      <li><a class="dropdown-item" href="#">Sites Report</a></li> 
-      </ul>
-    </li>
-
-    <li class="nav-item">
-      <a class="nav-link" href="#">Reports</a>
-    </li>
-               
-    </ul>
-
-    <!-- Right Icons -->
-    <ul class="navbar-nav ms-auto align-items-center">
-
-    <!-- Notification Bell -->
-    <li class="nav-item dropdown me-3">
-          <a id="notificationBell" class="nav-link position-relative dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-bell fs-5"></i>
-            <span id="notificationBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger visually-hidden">0</span>
-          </a>
-          <ul id="notificationDropdown" class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell">
-            <li class="dropdown-item text-center text-muted small">Loading...</li>
-          </ul>
-    </li>
-
-    <!-- Profile Dropdown -->
-    <li class="nav-item dropdown">
-      <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown">
-      <i class="bi bi-person-circle fs-4 me-1"></i>
-      </a>
-      <ul class="dropdown-menu dropdown-menu-end">
-      <li><a class="dropdown-item" href="#">My Account</a></li>
-      <li><hr class="dropdown-divider"></li>
-      <li><a class="dropdown-item text-danger" href="../logout.php">Logout</a></li>
-      </ul>
-    </li>
-
-    </ul>
-  </div>
-  </div>
-</nav>
-
-
-
-
-<footer class="bg-dark text-light text-center py-3 mt-auto">
-  <div class="container">
-  <small>
-    <?php echo date('Y'); ?> &copy; FREE PUBLIC INTERNET ACCESS PROGRAM - SERVICE MANAGEMENT AND RESPONSE TICKETING SYSTEM (FPIAP-SMARTs). All Rights Reserved.
-  </small>
-  </div>
-</footer>
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-    // Initialize on page load
-    document.addEventListener('DOMContentLoaded', function() {
-        fetchNotifications();
-        setInterval(fetchNotifications, 60000);
-
-        const bellToggle = document.getElementById('notificationBell');
-        if (bellToggle) {
-            bellToggle.addEventListener('show.bs.dropdown', fetchNotifications);
-        }
-    });
-
-    // Fetch notifications from notification.php
-    async function fetchNotifications() {
-        const dropdown = document.getElementById('notificationDropdown');
-        const badge = document.getElementById('notificationBadge');
-        if (!dropdown) return;
-        try {
-            const resp = await fetch('notification.php', { method: 'GET', cache: 'no-cache' });
-            if (!resp.ok) throw new Error('Network response not ok');
-            const html = await resp.text();
-            
-            if (html && html.trim().length > 0) {
-                dropdown.innerHTML = html;
-            } else {
-                dropdown.innerHTML = '<li class="dropdown-item text-center text-muted small">No notifications</li>';
-            }
-
-            // Attach click handlers to notification items
-            dropdown.querySelectorAll('.notification-item').forEach(item => {
-                item.addEventListener('click', function(e) {
-                    const notificationId = this.getAttribute('data-notification-id');
-                    if (notificationId) {
-                        fetch('../notif/api.php', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: 'action=mark_read&notification_id=' + notificationId
-                        }).catch(err => console.error('Failed to mark notification as read:', err));
-                        this.classList.remove('unread');
-                    }
-                });
-            });
-
-            const unread = dropdown.querySelectorAll('.notification-item.unread, li[data-unread="1"]').length;
-            if (unread > 0) {
-                badge.textContent = String(unread);
-                badge.classList.remove('visually-hidden');
-            } else {
-                badge.classList.add('visually-hidden');
-            }
-        } catch (err) {
-            dropdown.innerHTML = '<li class="dropdown-item text-danger small">Error loading notifications</li>';
-            if (badge) badge.classList.add('visually-hidden');
-            console.error('Failed to load notifications:', err);
-        }
-    }
-</script>
-
-</body>
-</html>
+<?php require __DIR__ . '/../includes/footer.php'; ?>

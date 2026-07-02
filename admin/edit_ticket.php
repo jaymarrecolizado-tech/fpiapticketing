@@ -5,7 +5,7 @@ require '../lib/Sanitizer.php';
 require '../lib/Validator.php';
 require '../notif/notification.php';
 require '../lib/Logger.php';
-require_once '../lib/duration.php';
+require_once '../lib/Duration.php';
 require_once '../lib/TicketHistory.php';
 
 requireAdmin();
@@ -27,9 +27,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // handle update
         $status = Sanitizer::normalize($_POST['status'] ?? 'OPEN');
         $notes = Sanitizer::normalize($_POST['notes'] ?? '');
+        $assignedTo = !empty($_POST['assigned_to']) ? intval($_POST['assigned_to']) : null;
 
         // Validate status
-        $validStatuses = ['IN_PROGRESS', 'RESOLVED'];
+        $validStatuses = ['IN_PROGRESS', 'RESOLVED', 'OPEN'];
         if (!Validator::inList($status, $validStatuses)) {
             $error = 'Invalid ticket status';
         } elseif (!Validator::string($notes, 0, 2000)) {
@@ -37,23 +38,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             try {
                 // Get current ticket status before update
-                $currentStmt = $pdo->prepare("SELECT status, ticket_number FROM tickets WHERE id = ?");
+                $currentStmt = $pdo->prepare("SELECT status, ticket_number, assigned_to FROM tickets WHERE id = ?");
                 $currentStmt->execute([$id]);
                 $currentTicket = $currentStmt->fetch(PDO::FETCH_ASSOC);
                 $oldStatus = $currentTicket['status'];
+                $oldAssigned = $currentTicket['assigned_to'];
                 $ticketNumber = $currentTicket['ticket_number'];
 
                 // Set solved_date and duration based on status
                 if ($status === 'CLOSED' || $status === 'RESOLVED') {
                     $solved_date = 'NOW()';
                     $duration_sql = ', duration = TIMESTAMPDIFF(MINUTE, created_at, NOW())';
+                } elseif ($status === 'OPEN' && $oldStatus === 'CLOSED') {
+                    // Reopening: clear solved_date and reset duration
+                    $solved_date = 'NULL';
+                    $duration_sql = ', duration = 0';
                 } else {
                     $solved_date = 'NULL';
                     $duration_sql = '';
                 }
-                $updateSql = "UPDATE tickets SET status = ?, notes = ?, solved_date = $solved_date, updated_at = NOW()$duration_sql WHERE id = ?";
+                $updateSql = "UPDATE tickets SET status = ?, notes = ?, assigned_to = ?, solved_date = $solved_date, updated_at = NOW()$duration_sql WHERE id = ?";
                 $stmt2 = $pdo->prepare($updateSql);
-                $stmt2->execute([$status, $notes, $id]);
+                $stmt2->execute([$status, $notes, $assignedTo, $id]);
                 
                 // Log ticket history
                 $history = new TicketHistory($pdo);
@@ -120,106 +126,8 @@ try {
 
 
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
-
-  <title>FPIAP-Service Management and Response Ticketing System</title>
-</head>
-<body class="d-flex flex-column min-vh-100" style="background-color: #f8f9fa;">
-
-<?php // navigation copied from viewtickets.php ?>
-<nav class="navbar sticky-top navbar-expand-lg navbar-light shadow-sm" style="background-color: #0ef;">
-  <div class="container-fluid">
-
-    <a class="navbar-brand d-flex align-items-center" href="dashboard.php">
-      <img src="../assets/freewifilogo.png" alt="Logo" width="100" height="100" class="me-2">
-      <img src="../assets/FPIAP-SMARTs.png" alt="Logo" width="100" height="100" class="me-2">
-      <div class="d-flex flex-column ms-0">
-        <span class="fw-bold">FPIAP-SMARTs</span>
-        <span class="fw-bold small align-self-center">ADMIN PANEL</span>
-      </div>
-    </a>
-    <hr class="mx-0 my-2 opacity-25">
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#mainNavbar">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div class="collapse navbar-collapse" id="mainNavbar">
-      <ul class="navbar-nav me-auto mb-2 mb-lg-0">
-        <li class="nav-item"><a class="nav-link" href="dashboard.php">Dashboard</a></li>
-        <li class="nav-item dropdown">
-          <a class="nav-link active dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Tickets</a>
-          <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-            <li><a class="dropdown-item" href="viewtickets.php">View Tickets</a></li>
-            <li><a class="dropdown-item" href="ticket.php">Create Ticket</a></li>
-          </ul>
-        </li>
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Sites</a>
-          <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-            <li><a class="dropdown-item" href="site.php">Manage Sites</a></li>
-            <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
-          </ul>
-        </li>
-        
-        <li class="nav-item dropdown">
-        <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
-        Reports
-        </a>
-            <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-                <li><a class="dropdown-item" href="ticket_report.php">Ticket Report</a></li>
-                <li><a class="dropdown-item" href="site_report.php">Sites Report</a></li>
-            </ul>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle" id="navbarDropdown" role="button" href="#" data-bs-toggle="dropdown" aria-haspopup="true" aria-expanded="false">Setting</a>
-          <ul class="dropdown-menu" aria-labelledby="navbarDropdown">
-            <li><a class="dropdown-item" href="personnel.php">Personnels</a></li>
-            <li><a class="dropdown-item" href="user.php">User's Management</a></li>
-            <li><a class="dropdown-item" href="systemlog.php">System Log</a></li>
-            <li><a class="dropdown-item" href="backup.php">Backup Management</a></li>
-            <li><a class="dropdown-item" href="data_export.php">Data Export</a></li>
-            <li><a class="dropdown-item" href="history.php">History</a></li>
-          </ul>
-        </li>
-      </ul>
-      <ul class="navbar-nav ms-auto align-items-center">
-        <li class="nav-item dropdown me-3">
-          <a id="notificationBell" class="nav-link position-relative dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
-            <i class="bi bi-bell fs-5"></i>
-            <span id="notificationBadge" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger visually-hidden">0</span>
-          </a>
-          <ul id="notificationDropdown" class="dropdown-menu dropdown-menu-end" aria-labelledby="notificationBell">
-            <li class="dropdown-item text-center text-muted small">Loading...</li>
-          </ul>
-        </li>
-
-        <li class="nav-item d-flex align-items-center me-3">
-          <div class="d-flex flex-column text-end">
-            <span class="fw-semibold text-dark small"><?php echo htmlspecialchars($_SESSION['username'] ?? 'Unknown User'); ?></span>
-          </div>
-        </li>
-
-        <li class="nav-item dropdown">
-          <a class="nav-link dropdown-toggle d-flex align-items-center" href="#" role="button" data-bs-toggle="dropdown">
-            <i class="bi bi-person-circle fs-4 me-1"></i>
-          </a>
-          <ul class="dropdown-menu dropdown-menu-end">
-            <li><a class="dropdown-item" href="account.php">My Account</a></li>
-            <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item text-danger" href="../logout.php">Logout</a></li>
-          </ul>
-        </li>
-      </ul>
-    </div>
-  </div>
-</nav>
+<?php $activePage = 'tickets'; ?>
+<?php require __DIR__ . '/../includes/admin_header.php'; ?>
 
 <main class="flex-grow-1 overflow-auto">
 <div class="container-fluid mt-4">
@@ -242,8 +150,25 @@ try {
                         <div class="mb-3">
                             <label class="form-label fw-bold">Status</label>
                             <select name="status" class="form-select" onchange="updateSummary()">
+                                <?php if ($ticket['status'] === 'CLOSED'): ?>
+                                <option value="OPEN"<?php if($ticket['status']=='OPEN') echo ' selected'; ?>>OPEN (Reopen)</option>
+                                <?php endif; ?>
                                 <option value="IN_PROGRESS"<?php if($ticket['status']=='IN_PROGRESS') echo ' selected'; ?>>IN PROGRESS</option>
                                 <option value="RESOLVED"<?php if($ticket['status']=='RESOLVED') echo ' selected'; ?>>RESOLVED</option>
+                            </select>
+                        </div>
+
+                        <!-- Assign To -->
+                        <div class="mb-3">
+                            <label class="form-label fw-bold">Assign To</label>
+                            <select name="assigned_to" class="form-select">
+                                <option value="">Unassigned</option>
+                                <?php
+                                $personnelList = $pdo->query("SELECT id, fullname FROM personnels WHERE status = 'active' ORDER BY fullname")->fetchAll(PDO::FETCH_ASSOC);
+                                foreach ($personnelList as $p):
+                                ?>
+                                <option value="<?php echo $p['id']; ?>"<?php if(($ticket['assigned_to'] ?? null) == $p['id']) echo ' selected'; ?>><?php echo htmlspecialchars($p['fullname']); ?></option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 
@@ -363,13 +288,7 @@ try {
 </div>
 </main>
 
-<footer class="bg-dark text-light text-center py-3 mt-auto">
-  <div class="container">
-    <?php echo date('Y'); ?> &copy; FREE PUBLIC INTERNET ACCESS PROGRAM - SERVICE MANAGEMENT AND RESPONSE TICKETING SYSTEM (FPIAP-SMARTs). All Rights Reserved.
-  </div>
-</footer>
-
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<?php require __DIR__ . '/../includes/footer.php'; ?>
 <script>
     // Update summary panel with live data
     function updateSummary() {
@@ -408,11 +327,9 @@ try {
         // Notes are not shown in summary panel but could be logged if needed
     }
 
-    // Initialize summary and notifications on page load
+    // Initialize summary on page load
     document.addEventListener('DOMContentLoaded', function() {
         updateSummary();
-        fetchNotifications();
-        setInterval(fetchNotifications, 60000);
         // Update summary every minute for real-time duration
         setInterval(updateSummary, 60000);
 
@@ -421,57 +338,8 @@ try {
         if (statusSelect) {
             statusSelect.addEventListener('change', updateSummary);
         }
-
-        const bellToggle = document.getElementById('notificationBell');
-        if (bellToggle) {
-            bellToggle.addEventListener('show.bs.dropdown', fetchNotifications);
-        }
     });
 
-    // Fetch notifications from notification.php
-    async function fetchNotifications() {
-        const dropdown = document.getElementById('notificationDropdown');
-        const badge = document.getElementById('notificationBadge');
-        if (!dropdown) return;
-        try {
-            const resp = await fetch('notification.php', { method: 'GET', cache: 'no-cache' });
-            if (!resp.ok) throw new Error('Network response not ok');
-            const html = await resp.text();
-            
-            if (html && html.trim().length > 0) {
-                dropdown.innerHTML = html;
-            } else {
-                dropdown.innerHTML = '<li class="dropdown-item text-center text-muted small">No notifications</li>';
-            }
-
-            // Attach click handlers to notification items
-            dropdown.querySelectorAll('.notification-item').forEach(item => {
-                item.addEventListener('click', function(e) {
-                    const notificationId = this.getAttribute('data-notification-id');
-                    if (notificationId) {
-                        fetch('../notif/api.php', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                            body: 'action=mark_read&notification_id=' + notificationId
-                        }).catch(err => console.error('Failed to mark notification as read:', err));
-                        this.classList.remove('unread');
-                    }
-                });
-            });
-
-            const unread = dropdown.querySelectorAll('.notification-item.unread, li[data-unread="1"]').length;
-            if (unread > 0) {
-                badge.textContent = String(unread);
-                badge.classList.remove('visually-hidden');
-            } else {
-                badge.classList.add('visually-hidden');
-            }
-        } catch (err) {
-            dropdown.innerHTML = '<li class="dropdown-item text-danger small">Error loading notifications</li>';
-            if (badge) badge.classList.add('visually-hidden');
-            console.error('Failed to load notifications:', err);
-        }
-    }
 </script>
 
 </body>
