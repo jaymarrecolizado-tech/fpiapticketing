@@ -3,8 +3,13 @@ require '../config/db.php';
 require '../config/auth.php';
 require '../lib/Sanitizer.php';
 require_once '../lib/Duration.php';
+require '../lib/PermissionManager.php';
 
-requireAdmin();
+requireLogin();
+if (!hasPermission('tickets.view')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 $id = (int)($_GET['id'] ?? 0);
 if ($id <= 0) {

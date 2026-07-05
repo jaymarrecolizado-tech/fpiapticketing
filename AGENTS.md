@@ -16,6 +16,7 @@ FPIAP-SMARTs (Free Public Internet Access Program - Service Management and Respo
 
 ```
 cagayansite_tickets/
+├── .htaccess               # Apache compression, caching, security headers
 ├── ROADMAP.md                # Phased feature implementation plan
 ├── DEPLOYMENT.md             # VPS deployment guide
 ├── AGENTS.md                 # This file
@@ -29,7 +30,7 @@ cagayansite_tickets/
 │   ├── db.php                # PDO connection (localhost, root, no pass)
 │   ├── auth.php              # Session config, CSRF, role checks (requireAdmin, requireLogin)
 │   └── security_headers.php  # CSP, HSTS, X-Frame-Options, etc.
-├── admin/                    # Admin-only pages (requireAdmin())
+├── admin/                    # Admin pages (requireAdmin or permission-based)
 │   ├── dashboard.php         # Main dashboard with charts and KPIs
 │   ├── ticket.php            # Create/manage tickets (AJAX endpoint)
 │   ├── viewtickets.php       # List all tickets
@@ -40,6 +41,7 @@ cagayansite_tickets/
 │   ├── ticket_report.php     # Ticket report
 │   ├── personnel.php         # Personnel management
 │   ├── user.php              # User account management
+│   ├── roles.php             # Role & permission management
 │   ├── notifications.php     # Admin notifications
 │   ├── notification.php      # Notification helper
 │   ├── history.php           # Activity history
@@ -68,7 +70,9 @@ cagayansite_tickets/
 │   ├── HistoryExport.php     # History export
 │   ├── BackupManager.php     # Backup creation and management
 │   ├── Duration.php          # Duration calculations
-│   └── AutoClose.php         # Auto-close resolved tickets (7 days)
+│   ├── AutoClose.php         # Auto-close resolved tickets (7 days)
+│   ├── SlaManager.php        # SLA tracking, alerts, compliance metrics
+│   ├── PermissionManager.php # RBAC permission checking
 ├── scripts/                  # CLI/cron scripts
 │   ├── automated_backup.php  # Cron backup (full/database/filesystem)
 │   ├── auto_close_resolved_tickets.php
@@ -82,7 +86,11 @@ cagayansite_tickets/
 │   ├── add_ticket_attachments.php # Migration: creates ticket_attachments table
 │   ├── add_categories_and_due_date.php # Migration: adds category, due_date columns
 │   ├── create_ticket_counter_table.php # Migration: creates ticket_counter for numbering
-│   └── describe_table.php    # DB table inspector (dev tool)
+│   ├── describe_table.php    # DB table inspector (dev tool)
+│   ├── create_sla_alerts_table.php # Migration: creates sla_alerts table
+│   ├── create_rbac_tables.php      # Migration: creates roles, permissions, role_permissions
+│   ├── check_sla_alerts.php        # Cron: scan tickets for SLA breaches
+│   └── add_performance_indexes.php  # Migration: adds 19 DB indexes
 ├── assets/
 │   ├── js/
 │   │   └── notifications.js  # Shared notification bell JS (auto-included via footer.php)
@@ -92,7 +100,7 @@ cagayansite_tickets/
 
 ## Database Schema (Key Tables)
 
-- **users**: id, personnel_id (FK), password (bcrypt), role (admin/user), status (active/inactive)
+- **users**: id, personnel_id (FK), password (bcrypt), role (admin/user/manager/operator), status (active/inactive)
 - **personnels**: id, fullname, gmail (used as login username)
 - **tickets**: id, ticket_number, subject, notes, status, priority (low/medium/high/critical), category (connectivity/hardware/software/power/security/other), site_id (FK), created_by (FK→personnels), assigned_to (FK→personnels), duration (minutes), created_at, updated_at, solved_date, due_date
 - **ticket_comments**: id, ticket_id (FK→tickets), user_id (FK→users), comment, created_at
@@ -100,6 +108,10 @@ cagayansite_tickets/
 - **sites**: id, site_name, isp, province, municipality, project_name, status
 - **system_logs**: id, user_id, personnel_id, action, entity_type, entity_id, details (JSON), description, ip_address, user_agent, severity, status, session_id, created_at
 - **notifications**: user_id, message, is_read, created_at
+- **roles**: id, name, description, is_system, created_at
+- **permissions**: id, name, description, category
+- **role_permissions**: role_id (FK→roles), permission_id (FK→permissions)
+- **sla_alerts**: id, ticket_id (FK→tickets), alert_type (warning/critical/breached), alerted_at
 
 ## Ticket Status Flow
 
@@ -124,6 +136,8 @@ OPEN → IN_PROGRESS → RESOLVED → CLOSED → OPEN (reopening)
 ### Authorization
 - `requireAdmin()` — redirects non-admins to users/dashboard
 - `requireLogin()` — redirects unauthenticated users to index.php
+- `requirePermission($perm)` — redirects if user lacks the specified permission
+- `hasPermission($perm)` — returns boolean, checks session-cached permission
 - `hasRole($role)` — checks session role
 
 ### Input Handling

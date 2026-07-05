@@ -4,9 +4,14 @@ require '../config/auth.php';
 require '../lib/Validator.php';
 require '../lib/Sanitizer.php';
 require '../notif/notification.php';
+require '../lib/PermissionManager.php';
 
-// enforce admin login
-requireAdmin();
+// enforce login with sites.view permission
+requireLogin();
+if (!hasPermission('sites.view')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 // preload all locations for client-side filtering
 // the dropdowns still use the locations table but sites now store province/municipality text directly
@@ -252,6 +257,9 @@ elseif ($action == 'edit_form') {
 }
 
 elseif ($action == 'save') {
+    if (!hasPermission('sites.create')) {
+        echo json_encode(['error' => 'Permission denied: sites.create required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo 'Error: Invalid security token.'; exit; }
     try {
@@ -315,6 +323,9 @@ elseif ($action == 'save') {
 }
 
 elseif ($action == 'update') {
+    if (!hasPermission('sites.edit')) {
+        echo json_encode(['error' => 'Permission denied: sites.edit required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo 'Error: Invalid security token.'; exit; }
     try {
@@ -359,6 +370,9 @@ elseif ($action == 'update') {
 }
 
 elseif ($action == 'delete') {
+    if (!hasPermission('sites.delete')) {
+        echo json_encode(['error' => 'Permission denied: sites.delete required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo 'Error: Invalid security token.'; exit; }
     $id = $_POST['id'] ?? '';
@@ -375,6 +389,9 @@ elseif ($action == 'delete') {
 
 // Phase 1: Parse CSV, detect duplicates, return preview for user review
 elseif ($action == 'preview_csv') {
+    if (!hasPermission('sites.import')) {
+        echo json_encode(['error' => 'Permission denied: sites.import required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     if (!isset($_FILES['csv_file']) || $_FILES['csv_file']['error'] !== UPLOAD_ERR_OK) {
@@ -472,6 +489,9 @@ elseif ($action == 'preview_csv') {
 
 // Phase 2: Process confirmed import with user override decisions
 elseif ($action == 'import_csv_confirmed') {
+    if (!hasPermission('sites.import')) {
+        echo json_encode(['error' => 'Permission denied: sites.import required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     if (empty($_SESSION['csv_preview'])) {
@@ -552,6 +572,9 @@ elseif (isset($_GET['action']) && $_GET['action'] === 'download_template') {
 }
 
 elseif ($action == 'bulk_delete') {
+    if (!hasPermission('sites.delete')) {
+        echo json_encode(['error' => 'Permission denied: sites.delete required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     $selectedIds = $_POST['selected_ids'] ?? [];
@@ -581,6 +604,9 @@ elseif ($action == 'bulk_delete') {
 }
 
 elseif ($action == 'bulk_update') {
+    if (!hasPermission('sites.edit')) {
+        echo json_encode(['error' => 'Permission denied: sites.edit required']); exit;
+    }
     $csrf = $_POST['csrf_token'] ?? '';
     if (!validateCSRFToken($csrf)) { echo json_encode(['error' => 'Invalid security token.']); exit; }
     

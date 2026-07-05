@@ -1,6 +1,6 @@
 <?php
 /**
- * Login Page - eJobOrder System
+ * Login Page - FPIAP-SMARTs
  * Secure authentication entry point with CSRF protection, rate limiting, and account lockout
  */
 

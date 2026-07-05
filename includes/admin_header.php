@@ -10,7 +10,9 @@ $activePage = $activePage ?? 'dashboard';
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+  <?php if ($activePage === 'dashboard'): ?>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <?php endif; ?>
   <title>FPIAP-Service Management and Response Ticketing System</title>
 </head>
 <body class="d-flex flex-column min-vh-100">
@@ -59,10 +61,11 @@ $activePage = $activePage ?? 'dashboard';
           <ul class="dropdown-menu">
             <li><a class="dropdown-item" href="personnel.php">Personnels</a></li>
             <li><a class="dropdown-item" href="user.php">User's Management</a></li>
+            <li><a class="dropdown-item" href="roles.php">Role & Permissions</a></li>
             <li><a class="dropdown-item" href="systemlog.php">System Log</a></li>
             <li><a class="dropdown-item" href="backup.php">Backup Management</a></li>
             <li><a class="dropdown-item" href="data_export.php">Data Export</a></li>
-            <li><a class="dropdown-item" href="history.php">History</a></li>
+            <li><a class="dropdown-item" href="history.php"><i class="bi bi-clock-history me-1"></i>Ticket History (Audit)</a></li>
           </ul>
         </li>
       </ul>

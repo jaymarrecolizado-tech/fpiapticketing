@@ -119,6 +119,8 @@ if ($action == 'add_form') {
                     <label class="form-label">Role</label>
                     <select name="role" class="form-select" required>
                         <option value="user">User</option>
+                        <option value="operator">Operator</option>
+                        <option value="manager">Manager</option>
                         <option value="admin">Admin</option>
                     </select>
                 </div>
@@ -173,6 +175,8 @@ if ($action == 'edit_form') {
                     <label class="form-label">Role</label>
                     <select name="role" class="form-select" required>
                         <option value="user" <?php echo ($user['role'] == 'user') ? 'selected' : ''; ?>>User</option>
+                        <option value="operator" <?php echo ($user['role'] == 'operator') ? 'selected' : ''; ?>>Operator</option>
+                        <option value="manager" <?php echo ($user['role'] == 'manager') ? 'selected' : ''; ?>>Manager</option>
                         <option value="admin" <?php echo ($user['role'] == 'admin') ? 'selected' : ''; ?>>Admin</option>
                     </select>
                 </div>

@@ -2,8 +2,13 @@
 require_once '../config/db.php';
 require_once '../config/auth.php';
 require_once '../config/security_headers.php';
+require_once '../lib/PermissionManager.php';
 
-requireAdmin();
+requireLogin();
+if (!hasPermission('reports.view')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 function buildWhereClause($filters, &$params = []) {
     $clauses = [];
@@ -260,6 +265,9 @@ if ($action === 'generate_report') {
 }
 
 if ($action === 'export_csv') {
+    if (!hasPermission('reports.export')) {
+        echo json_encode(['error' => 'Permission denied: reports.export required']); exit;
+    }
     $filters = json_decode($_GET['filters'] ?? '{}', true);
     $sortBy = $_GET['sort_by'] ?? '';
     $sortDirection = strtoupper($_GET['sort_direction'] ?? 'ASC');

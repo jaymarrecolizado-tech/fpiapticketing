@@ -4,8 +4,14 @@ require '../config/auth.php';
 require '../lib/Sanitizer.php';
 require '../lib/Logger.php';
 require '../lib/AutoClose.php';
+require '../lib/SlaManager.php';
+require '../lib/PermissionManager.php';
 
-requireAdmin();
+requireLogin();
+if (!hasPermission('dashboard.view')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 // Auto-close resolved tickets older than 7 days
 $logger = new Logger($pdo);
@@ -13,6 +19,10 @@ $autoClosed = autoCloseResolvedTickets($pdo, $logger);
 if ($autoClosed > 0) {
     // Optional: could store in session for display, but for now just run silently
 }
+
+// Scan for SLA alerts on open/in-progress tickets
+$slaManager = new SlaManager($pdo, $logger);
+$slaSummary = $slaManager->scanAllTickets();
 
 $action = $_POST['action'] ?? '';
 
@@ -60,6 +70,12 @@ if ($action) {
             case 'get_problematic_isp':
                 echo json_encode(getProblematicISP($_POST));
                 break;
+            case 'get_sla_alerts':
+                echo json_encode(getSlaAlerts($_POST));
+                break;
+            case 'get_isp_ranking':
+                echo json_encode(getIspRanking($_POST));
+                break;
             default:
                 echo json_encode(['error' => 'Invalid action']);
         }
@@ -103,6 +119,14 @@ function getStats($filters = []) {
         'aging_count' => (int)$result['aging_count'],
         'avg_time' => $result['avg_resolution_time'] ? round($result['avg_resolution_time'], 1) : 0
     ];
+}
+
+function getSlaAlerts($filters = []) {
+    global $pdo;
+    $slaManager = new SlaManager($pdo);
+    $summary = $slaManager->getSlaSummary();
+    $tickets = $slaManager->getSlAAlertTickets(10);
+    return array_merge($summary, ['tickets' => $tickets]);
 }
 
 function getChartStatus($filters = []) {
@@ -479,6 +503,29 @@ function getProblematicISP($filters = []) {
         'isp_name' => $result['isp_name'],
         'ticket_count' => (int)$result['ticket_count']
     ];
+}
+
+function getIspRanking($filters = []) {
+    global $pdo;
+
+    $whereData = buildWhereClause($filters);
+
+    $sql = "SELECT
+        COALESCE(s.isp, 'Unknown') as isp_name,
+        COUNT(t.id) as open_count,
+        SUM(CASE WHEN t.status = 'IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress_count,
+        SUM(CASE WHEN t.status = 'OPEN' THEN 1 ELSE 0 END) as open_only_count
+    FROM tickets t
+    LEFT JOIN sites s ON t.site_id = s.id
+    WHERE (t.status = 'OPEN' OR t.status = 'IN_PROGRESS')
+    AND 1=1{$whereData['sql']}
+    GROUP BY s.isp
+    ORDER BY open_count DESC
+    LIMIT 10";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($whereData['params']);
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 function buildWhereClause($filters) {
@@ -918,6 +965,8 @@ function countWeekdays($start, $end) {
                 <li><a class="dropdown-item" onclick="setDateRange('last30days')">Last 30 Days</a></li>
                 <li><a class="dropdown-item" onclick="setDateRange('thisMonth')">This Month</a></li>
                 <li><a class="dropdown-item" onclick="setDateRange('lastMonth')">Last Month</a></li>
+                <li><a class="dropdown-item" onclick="setDateRange('thisQuarter')">This Quarter</a></li>
+                <li><a class="dropdown-item" onclick="setDateRange('thisYear')">This Year</a></li>
                 <li><hr class="dropdown-divider"></li>
                 <li><a class="dropdown-item" onclick="clearDateRange()">Clear Dates</a></li>
               </ul>
@@ -991,6 +1040,30 @@ function countWeekdays($start, $end) {
         <div class="card-body">
           <div class="display-6 fw-bold text-secondary" id="agingTickets">0</div>
           <div class="text-muted small">Aging Tickets</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-2 col-lg-3 col-md-4 col-sm-6 mb-3">
+      <div class="card text-center h-100 border-warning" style="border-width: 2px;">
+        <div class="card-body">
+          <div class="display-6 fw-bold text-warning" id="slaWarning">0</div>
+          <div class="text-muted small"><i class="bi bi-exclamation-triangle me-1"></i>SLA Warning</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-2 col-lg-3 col-md-4 col-sm-6 mb-3">
+      <div class="card text-center h-100 border-danger" style="border-width: 2px;">
+        <div class="card-body">
+          <div class="display-6 fw-bold text-danger" id="slaCritical">0</div>
+          <div class="text-muted small"><i class="bi bi-exclamation-octagon me-1"></i>SLA Critical</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-2 col-lg-3 col-md-4 col-sm-6 mb-3">
+      <div class="card text-center h-100 border-dark" style="border-width: 2px; background-color: #fff5f5;">
+        <div class="card-body">
+          <div class="display-6 fw-bold text-dark" id="slaBreached">0</div>
+          <div class="text-muted small"><i class="bi bi-shield-exclamation me-1"></i>SLA Breached</div>
         </div>
       </div>
     </div>
@@ -1135,6 +1208,32 @@ function countWeekdays($start, $end) {
     </div>
   </div>
 
+  <!-- SLA Compliance & ISP Ranking Row -->
+  <div class="row mb-4">
+    <div class="col-lg-5 col-md-6 mb-4">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-shield-check me-2"></i>SLA Compliance</h5>
+          <span class="badge bg-secondary" id="slaTotalActive">0 active</span>
+        </div>
+        <div class="card-body d-flex align-items-center justify-content-center" style="min-height: 280px;">
+          <canvas id="slaComplianceChart" height="200"></canvas>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-7 col-md-6 mb-4">
+      <div class="card h-100">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-wifi me-2"></i>ISP Performance Ranking</h5>
+          <small class="text-muted">Open/In-Progress tickets by ISP</small>
+        </div>
+        <div class="card-body" style="min-height: 280px;">
+          <canvas id="ispRankingChart" height="200"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Creator Chart -->
   <div class="row mb-4">
     <div class="col-12">
@@ -1253,7 +1352,7 @@ function countWeekdays($start, $end) {
 <?php require __DIR__ . '/../includes/footer.php'; ?>
 <script>
 // Dashboard JavaScript Functions
-let statusChart, agingChart, createdByChart;
+let statusChart, agingChart, createdByChart, slaComplianceChart, ispRankingChart;
 
 document.addEventListener('DOMContentLoaded', function() {
     initDashboard();
@@ -1262,6 +1361,16 @@ document.addEventListener('DOMContentLoaded', function() {
 function initDashboard() {
     loadFilterOptions();
     setupCharts();
+    
+    // Restore date range from URL params
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('date_from')) {
+        document.getElementById('filterDateFrom').value = urlParams.get('date_from');
+    }
+    if (urlParams.has('date_to')) {
+        document.getElementById('filterDateTo').value = urlParams.get('date_to');
+    }
+    
     applyFilters();
     loadAgingTickets();
     setupDropdownBehavior();
@@ -1447,6 +1556,71 @@ function setupCharts() {
                 legend: {
                     position: 'top'
                 }
+            }
+        }
+    });
+
+    // SLA Compliance Doughnut Chart
+    const slaCtx = document.getElementById('slaComplianceChart').getContext('2d');
+    slaComplianceChart = new Chart(slaCtx, {
+        type: 'doughnut',
+        data: {
+            labels: ['OK', 'Warning', 'Critical', 'Breached'],
+            datasets: [{
+                data: [0, 0, 0, 0],
+                backgroundColor: ['#198754', '#ffc107', '#fd7e14', '#dc3545'],
+                borderWidth: 2,
+                borderColor: '#fff'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '55%',
+            plugins: {
+                legend: { position: 'bottom', labels: { padding: 15, usePointStyle: true } },
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                            const pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0;
+                            return ctx.label + ': ' + ctx.parsed + ' (' + pct + '%)';
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // ISP Performance Ranking Bar Chart
+    const ispCtx = document.getElementById('ispRankingChart').getContext('2d');
+    ispRankingChart = new Chart(ispCtx, {
+        type: 'bar',
+        data: {
+            labels: [],
+            datasets: [
+                {
+                    label: 'OPEN',
+                    data: [],
+                    backgroundColor: '#dc3545'
+                },
+                {
+                    label: 'IN_PROGRESS',
+                    data: [],
+                    backgroundColor: '#ffc107'
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            indexAxis: 'y',
+            scales: {
+                x: { stacked: true, beginAtZero: true, title: { display: true, text: 'Ticket Count' } },
+                y: { stacked: true }
+            },
+            plugins: {
+                legend: { position: 'top' }
             }
         }
     });
@@ -1944,6 +2118,7 @@ function removeFilter(type) {
     } else if (type === 'date') {
         document.getElementById('filterDateFrom').value = '';
         document.getElementById('filterDateTo').value = '';
+        syncUrlWithDateFilters();
     }
     updateActiveFilters();
     applyFilters();
@@ -1984,11 +2159,21 @@ function setDateRange(range) {
             fromDate = lastMonth.toISOString().split('T')[0];
             toDate = lastMonthEnd.toISOString().split('T')[0];
             break;
+        case 'thisQuarter':
+            const quarter = Math.floor(today.getMonth() / 3);
+            fromDate = new Date(today.getFullYear(), quarter * 3, 1).toISOString().split('T')[0];
+            toDate = today.toISOString().split('T')[0];
+            break;
+        case 'thisYear':
+            fromDate = new Date(today.getFullYear(), 0, 1).toISOString().split('T')[0];
+            toDate = today.toISOString().split('T')[0];
+            break;
     }
     
     document.getElementById('filterDateFrom').value = fromDate;
     document.getElementById('filterDateTo').value = toDate;
     updateActiveFilters();
+    syncUrlWithDateFilters();
     
     // Close dropdown
     const dropdown = event.target.closest('.dropdown');
@@ -2000,11 +2185,22 @@ function clearDateRange() {
     document.getElementById('filterDateFrom').value = '';
     document.getElementById('filterDateTo').value = '';
     updateActiveFilters();
+    syncUrlWithDateFilters();
     
     // Close dropdown
     const dropdown = event.target.closest('.dropdown');
     const bsDropdown = bootstrap.Dropdown.getInstance(dropdown.querySelector('.dropdown-toggle'));
     if (bsDropdown) bsDropdown.hide();
+}
+
+function syncUrlWithDateFilters() {
+    const dateFrom = document.getElementById('filterDateFrom').value;
+    const dateTo = document.getElementById('filterDateTo').value;
+    const params = new URLSearchParams(window.location.search);
+    if (dateFrom) params.set('date_from', dateFrom); else params.delete('date_from');
+    if (dateTo) params.set('date_to', dateTo); else params.delete('date_to');
+    const newUrl = params.toString() ? '?' + params.toString() : window.location.pathname;
+    history.replaceState(null, '', newUrl);
 }
 
 function applyFilters() {
@@ -2021,6 +2217,8 @@ function applyFilters() {
     loadChartCreatedBy(filters);
     loadRecentTickets(filters);
     loadAgingTickets(filters, 1);
+    loadSlaComplianceChart(filters);
+    loadIspRankingChart(filters);
 }
 
 function resetFilters() {
@@ -2135,6 +2333,30 @@ function loadProblematicISP(filters) {
         .catch(err => console.error('Failed to load problematic ISP:', err));
 }
 
+function loadSlaComplianceChart(filters) {
+    postRequest('dashboard.php', { action: 'get_sla_alerts', ...filters })
+        .then(data => {
+            if (data.error) { console.error('Failed to load SLA compliance:', data.error); return; }
+            const ok = Math.max(0, (data.total_active || 0) - (data.warning || 0) - (data.critical || 0) - (data.breached || 0));
+            slaComplianceChart.data.datasets[0].data = [ok, data.warning || 0, data.critical || 0, data.breached || 0];
+            slaComplianceChart.update();
+            document.getElementById('slaTotalActive').textContent = (data.total_active || 0) + ' active';
+        })
+        .catch(err => console.error('Failed to load SLA compliance:', err));
+}
+
+function loadIspRankingChart(filters) {
+    postRequest('dashboard.php', { action: 'get_isp_ranking', ...filters })
+        .then(data => {
+            if (data.error) { console.error('Failed to load ISP ranking:', data.error); return; }
+            ispRankingChart.data.labels = data.map(r => r.isp_name);
+            ispRankingChart.data.datasets[0].data = data.map(r => parseInt(r.open_only_count) || 0);
+            ispRankingChart.data.datasets[1].data = data.map(r => parseInt(r.in_progress_count) || 0);
+            ispRankingChart.update();
+        })
+        .catch(err => console.error('Failed to load ISP ranking:', err));
+}
+
 function loadStats(filters) {
     postRequest('dashboard.php', { action: 'get_stats', ...filters })
         .then(data => {
@@ -2160,6 +2382,14 @@ function loadStats(filters) {
                 agingCard.classList.remove('border-danger', 'border-3');
                 agingCard.style.backgroundColor = '';
             }
+
+            // Load SLA alerts
+            postRequest('dashboard.php', { action: 'get_sla_alerts', ...filters })
+                .then(sla => {
+                    document.getElementById('slaWarning').textContent = sla.warning || 0;
+                    document.getElementById('slaCritical').textContent = sla.critical || 0;
+                    document.getElementById('slaBreached').textContent = sla.breached || 0;
+                }).catch(() => {});
         })
         .catch(err => console.error('Failed to load stats:', err));
 }

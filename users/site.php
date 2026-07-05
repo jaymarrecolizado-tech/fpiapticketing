@@ -7,8 +7,8 @@ require '../notif/notification.php';
 
 requireLogin();
 
-// Get current user's personnel_id for ownership filtering
-$stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
+// Get current user's personnel_id and role for ownership filtering
+$stmt = $pdo->prepare("SELECT personnel_id, role FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$user) {
@@ -17,6 +17,12 @@ if (!$user) {
 }
 $_SESSION['personnel_id'] = $user['personnel_id'];
 $personnelId = $user['personnel_id'];
+$userRole = $user['role'] ?? 'user';
+$isPrivileged = in_array($userRole, ['admin', 'manager', 'operator']);
+
+// Helper: ownership filter for queries — privileged roles see all data
+$cb = $isPrivileged ? '' : 'AND created_by = ?';
+$cbParam = $isPrivileged ? null : $personnelId;
 
 // preload all locations for client-side filtering
 // the dropdowns still use the locations table but sites now store province/municipality text directly
@@ -30,28 +36,35 @@ foreach ($allLocations as $l) {
     }
 }
 sort($provinces);
-// autocomplete sources from user's own site data
-$projStmt = $pdo->prepare("SELECT DISTINCT project_name FROM sites WHERE created_by = ? AND project_name IS NOT NULL AND project_name != '' ORDER BY project_name");
-$projStmt->execute([$personnelId]);
+// autocomplete sources from site data (all for privileged, own for regular)
+$projSql = "SELECT DISTINCT project_name FROM sites WHERE project_name IS NOT NULL AND project_name != '' $cb ORDER BY project_name";
+$projStmt = $pdo->prepare($projSql);
+$projStmt->execute(array_filter([$cbParam]));
 $allProjects = $projStmt->fetchAll(PDO::FETCH_COLUMN);
-$ispStmt = $pdo->prepare("SELECT DISTINCT isp FROM sites WHERE created_by = ? AND isp IS NOT NULL AND isp != '' ORDER BY isp");
-$ispStmt->execute([$personnelId]);
+$ispSql = "SELECT DISTINCT isp FROM sites WHERE isp IS NOT NULL AND isp != '' $cb ORDER BY isp";
+$ispStmt = $pdo->prepare($ispSql);
+$ispStmt->execute(array_filter([$cbParam]));
 $allISP = $ispStmt->fetchAll(PDO::FETCH_COLUMN);
 
-$locNameStmt = $pdo->prepare("SELECT DISTINCT location_name FROM sites WHERE created_by = ? AND location_name IS NOT NULL AND location_name != '' ORDER BY location_name");
-$locNameStmt->execute([$personnelId]);
+$locNameSql = "SELECT DISTINCT location_name FROM sites WHERE location_name IS NOT NULL AND location_name != '' $cb ORDER BY location_name";
+$locNameStmt = $pdo->prepare($locNameSql);
+$locNameStmt->execute(array_filter([$cbParam]));
 $allLocationNames = $locNameStmt->fetchAll(PDO::FETCH_COLUMN);
-$siteNameStmt = $pdo->prepare("SELECT DISTINCT site_name FROM sites WHERE created_by = ? AND site_name IS NOT NULL AND site_name != '' ORDER BY site_name");
-$siteNameStmt->execute([$personnelId]);
+$siteNameSql = "SELECT DISTINCT site_name FROM sites WHERE site_name IS NOT NULL AND site_name != '' $cb ORDER BY site_name";
+$siteNameStmt = $pdo->prepare($siteNameSql);
+$siteNameStmt->execute(array_filter([$cbParam]));
 $allSiteNames = $siteNameStmt->fetchAll(PDO::FETCH_COLUMN);
-$apCodeStmt = $pdo->prepare("SELECT DISTINCT ap_site_code FROM sites WHERE created_by = ? AND ap_site_code IS NOT NULL AND ap_site_code != '' ORDER BY ap_site_code");
-$apCodeStmt->execute([$personnelId]);
+$apCodeSql = "SELECT DISTINCT ap_site_code FROM sites WHERE ap_site_code IS NOT NULL AND ap_site_code != '' $cb ORDER BY ap_site_code";
+$apCodeStmt = $pdo->prepare($apCodeSql);
+$apCodeStmt->execute(array_filter([$cbParam]));
 $allApCodes = $apCodeStmt->fetchAll(PDO::FETCH_COLUMN);
-$munStmt = $pdo->prepare("SELECT DISTINCT municipality FROM sites WHERE created_by = ? AND municipality IS NOT NULL AND municipality != '' ORDER BY municipality");
-$munStmt->execute([$personnelId]);
+$munSql = "SELECT DISTINCT municipality FROM sites WHERE municipality IS NOT NULL AND municipality != '' $cb ORDER BY municipality";
+$munStmt = $pdo->prepare($munSql);
+$munStmt->execute(array_filter([$cbParam]));
 $allMunicipalities = $munStmt->fetchAll(PDO::FETCH_COLUMN);
-$provStmt = $pdo->prepare("SELECT DISTINCT province FROM sites WHERE created_by = ? AND province IS NOT NULL AND province != '' ORDER BY province");
-$provStmt->execute([$personnelId]);
+$provSql = "SELECT DISTINCT province FROM sites WHERE province IS NOT NULL AND province != '' $cb ORDER BY province";
+$provStmt = $pdo->prepare($provSql);
+$provStmt->execute(array_filter([$cbParam]));
 $allProvinces = $provStmt->fetchAll(PDO::FETCH_COLUMN);
 
 $action = $_POST['action'] ?? '';
@@ -74,19 +87,19 @@ function statusBadge($status) {
     return "<span class='badge' style='background-color:{$color}; color:{$textColor};'>" . htmlspecialchars($status) . "</span>";
 }
 
-// duplicate checker used by both single and bulk operations - scoped to current user
+// duplicate checker used by both single and bulk operations - scoped to current user or all for privileged
 function isDuplicateSite($project, $location, $siteName, $apSiteCode, $province, $municipality, $excludeId = null, $personnelId = null) {
-    global $pdo;
-    $sql = "SELECT COUNT(*) FROM sites WHERE project_name=? AND location_name=? AND site_name=? AND ap_site_code=? AND province=? AND municipality=? AND created_by=?";
+    global $pdo, $isPrivileged;
+    $cb = $isPrivileged ? '' : 'AND created_by=?';
+    $sql = "SELECT COUNT(*) FROM sites WHERE project_name=? AND location_name=? AND site_name=? AND ap_site_code=? AND province=? AND municipality=? $cb";
     if ($excludeId !== null) {
         $sql .= " AND id<>?";
     }
     $stmt = $pdo->prepare($sql);
-    if ($excludeId !== null) {
-        $stmt->execute([$project, $location, $siteName, $apSiteCode, $province, $municipality, $personnelId, $excludeId]);
-    } else {
-        $stmt->execute([$project, $location, $siteName, $apSiteCode, $province, $municipality, $personnelId]);
-    }
+    $params = [$project, $location, $siteName, $apSiteCode, $province, $municipality];
+    if (!$isPrivileged) $params[] = $personnelId;
+    if ($excludeId !== null) $params[] = $excludeId;
+    $stmt->execute($params);
     return $stmt->fetchColumn() > 0;
 }
 // handlers
@@ -150,9 +163,11 @@ if ($action == 'add_form') {
 
 elseif ($action == 'view_details') {
     $id = $_POST['id'];
-    // sites table stores province/municipality directly - verify ownership
-    $stmt = $pdo->prepare("SELECT * FROM sites WHERE id = ? AND created_by = ?");
-    $stmt->execute([$id, $personnelId]);
+    // sites table stores province/municipality directly - verify ownership (skipped for privileged)
+    $sql = "SELECT * FROM sites WHERE id = ? " . ($isPrivileged ? "" : "AND created_by = ?");
+    $params = $isPrivileged ? [$id] : [$id, $personnelId];
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     $site = $stmt->fetch(PDO::FETCH_ASSOC);
     ?>
     <div class="card">
@@ -178,8 +193,10 @@ elseif ($action == 'view_details') {
 
 elseif ($action == 'edit_form') {
     $id = $_POST['id'];
-    $stmt = $pdo->prepare("SELECT * FROM sites WHERE id = ? AND created_by = ?");
-    $stmt->execute([$id, $personnelId]);
+    $sql = "SELECT * FROM sites WHERE id = ? " . ($isPrivileged ? "" : "AND created_by = ?");
+    $params = $isPrivileged ? [$id] : [$id, $personnelId];
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     $site = $stmt->fetch(PDO::FETCH_ASSOC);
     // site now stores province and municipality directly
     $currentProvince = $site['province'] ?? '';
@@ -323,9 +340,11 @@ elseif ($action == 'update') {
         $id = $_POST['id'] ?? '';
         if (!Validator::positiveInteger($id)) { echo 'Error: Invalid ID.'; exit; }
         
-        // Verify user owns this site before updating
-        $checkStmt = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND created_by = ?");
-        $checkStmt->execute([$id, $personnelId]);
+        // Verify user owns this site before updating (skipped for privileged)
+        $sql = "SELECT id FROM sites WHERE id = ? " . ($isPrivileged ? "" : "AND created_by = ?");
+        $params = $isPrivileged ? [$id] : [$id, $personnelId];
+        $checkStmt = $pdo->prepare($sql);
+        $checkStmt->execute($params);
         if (!$checkStmt->fetch()) {
             echo 'Error: Access denied.'; exit;
         }
@@ -371,9 +390,11 @@ elseif ($action == 'delete') {
     $id = $_POST['id'] ?? '';
     if (!Validator::positiveInteger($id)) { echo 'Error: Invalid ID.'; exit; }
     try {
-        // Only delete if user owns this site
-        $stmt = $pdo->prepare("DELETE FROM sites WHERE id=? AND created_by=?");
-        $stmt->execute([$id, $personnelId]);
+        // Only delete if user owns this site (skipped for privileged)
+        $sql = "DELETE FROM sites WHERE id=?" . ($isPrivileged ? "" : " AND created_by=?");
+        $params = $isPrivileged ? [$id] : [$id, $personnelId];
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
         echo 'success';
     } catch (PDOException $e) {
         echo 'Error: Database error.'; error_log('Site delete error: '.$e->getMessage());
@@ -488,9 +509,11 @@ elseif ($action == 'bulk_delete') {
         if (!Validator::positiveInteger($id)) {
             echo json_encode(['error' => 'Invalid site ID.']); exit;
         }
-        // ensure user owns site
-        $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND created_by = ?");
-        $chk->execute([$id,$personnelId]);
+        // ensure user owns site (skipped for privileged)
+        $sql = "SELECT id FROM sites WHERE id = ? " . ($isPrivileged ? "" : "AND created_by = ?");
+        $params = $isPrivileged ? [$id] : [$id, $personnelId];
+        $chk = $pdo->prepare($sql);
+        $chk->execute($params);
         if (!$chk->fetch()) {
             echo json_encode(['error' => 'Access denied.']); exit;
         }
@@ -498,9 +521,9 @@ elseif ($action == 'bulk_delete') {
     try {
         $pdo->beginTransaction();
         $placeholders = str_repeat('?, ', count($selectedIds) - 1) . '?';
-        $sql = "DELETE FROM sites WHERE id IN ($placeholders) AND created_by = ?";
+        $sql = "DELETE FROM sites WHERE id IN ($placeholders)" . ($isPrivileged ? "" : " AND created_by = ?");
         $stmt = $pdo->prepare($sql);
-        $params = array_merge($selectedIds, [$personnelId]);
+        $params = $isPrivileged ? $selectedIds : array_merge($selectedIds, [$personnelId]);
         $stmt->execute($params);
         $deleted = $stmt->rowCount();
         $pdo->commit();
@@ -522,14 +545,16 @@ elseif ($action == 'bulk_update') {
         echo json_encode(['error' => 'No sites selected.']); exit;
     }
     
-    // Validate IDs and ownership
+    // Validate IDs and ownership (skipped for privileged)
     foreach ($selectedIds as $id) {
         if (!Validator::positiveInteger($id)) {
             echo json_encode(['error' => 'Invalid site ID.']); exit;
         }
         // Check ownership
-        $checkStmt = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND created_by = ?");
-        $checkStmt->execute([$id, $personnelId]);
+        $sql = "SELECT id FROM sites WHERE id = ? " . ($isPrivileged ? "" : "AND created_by = ?");
+        $params = $isPrivileged ? [$id] : [$id, $personnelId];
+        $checkStmt = $pdo->prepare($sql);
+        $checkStmt->execute($params);
         if (!$checkStmt->fetch()) {
             echo json_encode(['error' => 'Access denied to one or more sites.']); exit;
         }
@@ -577,9 +602,9 @@ elseif ($action == 'bulk_update') {
         $setClause = implode(' = ?, ', array_keys($updates)) . ' = ?';
         $placeholders = str_repeat('?, ', count($selectedIds) - 1) . '?';
         
-        $sql = "UPDATE sites SET $setClause WHERE id IN ($placeholders) AND created_by = ?";
+        $sql = "UPDATE sites SET $setClause WHERE id IN ($placeholders)" . ($isPrivileged ? "" : " AND created_by = ?");
         $stmt = $pdo->prepare($sql);
-        $params = array_merge(array_values($updates), $selectedIds, [$personnelId]);
+        $params = $isPrivileged ? array_merge(array_values($updates), $selectedIds) : array_merge(array_values($updates), $selectedIds, [$personnelId]);
         $stmt->execute($params);
         
         $affectedRows = $stmt->rowCount();
@@ -622,9 +647,9 @@ $currentPage = isset($_GET['page']) ? intval($_GET['page']) : 1;
 if ($currentPage < 1) $currentPage = 1;
 $offset = ($currentPage - 1) * $perPage;
 
-// build search filter - always filter by created_by (user's own sites)
-$whereClause = 'WHERE created_by = ?';
-$params = [$personnelId];
+// build search filter - filter by created_by for regular users, all sites for privileged
+$whereClause = $isPrivileged ? 'WHERE 1=1' : 'WHERE created_by = ?';
+$params = $isPrivileged ? [] : [$personnelId];
 if (!empty($searchQuery)) {
     $searchTerm = '%' . $searchQuery . '%';
     // wrap the OR-conditions in parentheses so additional AND clauses apply correctly

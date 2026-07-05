@@ -15,6 +15,13 @@ require '../notif/notification.php';
 require '../lib/Logger.php';
 require '../lib/AutoClose.php';
 require_once '../lib/TicketHistory.php';
+require '../lib/PermissionManager.php';
+
+requireLogin();
+if (!hasPermission('tickets.create')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 $action = $_POST['action'] ?? '';
 
@@ -339,8 +346,7 @@ if ($action == 'auto_close_resolved') {
     exit;
 }
 
-// ===== SECURITY: Enforce admin authentication for page access (not AJAX) =====
-requireAdmin();
+// ===== SECURITY: Page access requires tickets.create permission =====
 
 ?>
 <?php $activePage = 'tickets'; ?>

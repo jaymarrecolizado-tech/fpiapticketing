@@ -121,4 +121,54 @@ function logoutUser() {
     header("Location: index.php");
     exit;
 }
+
+/**
+ * Get or create a PermissionManager for the current user.
+ * Loads permissions into session for caching.
+ */
+function getPermissionManager() {
+    static $pm = null;
+    if ($pm !== null) return $pm;
+
+    require_once __DIR__ . '/../lib/PermissionManager.php';
+    global $pdo;
+
+    $pm = new PermissionManager($pdo);
+
+    // Cache permissions in session for this request
+    if (!isset($_SESSION['permissions_loaded'])) {
+        $pm->loadPermissions($_SESSION['user_id']);
+        $_SESSION['cached_permissions'] = $pm->getAll();
+        $_SESSION['cached_role'] = $pm->getRole();
+        $_SESSION['permissions_loaded'] = true;
+    } else {
+        $pm->permissions = $_SESSION['cached_permissions'] ?? [];
+        $pm->role = $_SESSION['cached_role'] ?? $_SESSION['role'] ?? null;
+    }
+
+    return $pm;
+}
+
+/**
+ * Check if current user has a specific permission.
+ */
+function hasPermission($permission) {
+    return getPermissionManager()->has($permission);
+}
+
+/**
+ * Require a specific permission. Shows 403 if denied.
+ */
+function requirePermission($permission) {
+    if (!hasPermission($permission)) {
+        http_response_code(403);
+        if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest') {
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Permission denied: ' . $permission]);
+        } else {
+            echo '<div class="container mt-5"><div class="alert alert-danger"><h4>Access Denied</h4><p>You do not have permission to access this page. Required: <code>' . htmlspecialchars($permission) . '</code></p><a href="dashboard.php" class="btn btn-primary">Back to Dashboard</a></div></div>';
+        }
+        exit;
+    }
+}
 ?>

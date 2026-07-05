@@ -248,7 +248,8 @@ class NotificationManager {
         }
     }
 
-    /**     * Send notifications for bulk ticket creation
+    /**
+     * Send notifications for bulk ticket creation
      * - Notifies all admins once
      * - Optionally notifies creator once if they are not admin
      */
@@ -284,7 +285,8 @@ class NotificationManager {
         }
     }
 
-    /**     * Create an in-app notification in the database
+    /**
+     * Create an in-app notification in the database
      */
     private function createInAppNotification($userId, $type, $data) {
         try {

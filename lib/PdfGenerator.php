@@ -171,7 +171,7 @@ class PdfGenerator
 
         // Status coloring
         if ($header === 'status') {
-            $class = 'status-' strtolower(str_replace('_', '-', $value));
+            $class = 'status-' . strtolower(str_replace('_', '-', $value));
             return "<span class='{$class}'>" . htmlspecialchars($value) . '</span>';
         }
 

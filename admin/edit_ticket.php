@@ -7,8 +7,13 @@ require '../notif/notification.php';
 require '../lib/Logger.php';
 require_once '../lib/Duration.php';
 require_once '../lib/TicketHistory.php';
+require '../lib/PermissionManager.php';
 
-requireAdmin();
+requireLogin();
+if (!hasPermission('tickets.update')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 $id = (int)($_GET['id'] ?? 0);
 if ($id <= 0) {

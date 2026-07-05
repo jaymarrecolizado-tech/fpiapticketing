@@ -3,9 +3,14 @@ require '../config/db.php';
 require '../config/auth.php';
 require '../lib/Sanitizer.php';
 require '../lib/Validator.php';
+require '../lib/PermissionManager.php';
 
 // Security
-requireAdmin();
+requireLogin();
+if (!hasPermission('reports.view')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
 
@@ -63,6 +68,9 @@ if ($action === 'generate_report') {
 
 // ===== EXPORT REPORT =====
 elseif ($action === 'export') {
+    if (!hasPermission('reports.export')) {
+        echo json_encode(['error' => 'Permission denied: reports.export required']); exit;
+    }
     $reportType = $_GET['type'] ?? '';
     $format = $_GET['format'] ?? 'csv'; // csv or pdf
     $filters = json_decode($_GET['filters'] ?? '{}', true);

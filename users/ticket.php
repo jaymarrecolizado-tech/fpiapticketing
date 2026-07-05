@@ -15,8 +15,8 @@ require_once '../lib/TicketHistory.php';
 
 requireLogin();
 
-// Get current user's personnel_id
-$stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
+// Get current user's personnel_id and role
+$stmt = $pdo->prepare("SELECT personnel_id, role FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$user) {
@@ -24,6 +24,8 @@ if (!$user) {
     exit;
 }
 $personnelId = $user['personnel_id'];
+$userRole = $user['role'] ?? 'user';
+$isPrivileged = in_array($userRole, ['admin', 'manager', 'operator']);
 
 $action = $_POST['action'] ?? '';
 
@@ -32,24 +34,27 @@ if ($action == 'get_filter_options') {
     ob_clean();
     header('Content-Type: application/json');
     try {
-        $projects = $pdo->prepare("SELECT DISTINCT project_name FROM sites WHERE created_by = ? AND project_name IS NOT NULL AND project_name != '' ORDER BY project_name");
-        $projects->execute([$personnelId]);
+        $cb = $isPrivileged ? '' : 'AND created_by = ?';
+        $cbParam = $isPrivileged ? null : $personnelId;
+
+        $projects = $pdo->prepare("SELECT DISTINCT project_name FROM sites WHERE project_name IS NOT NULL AND project_name != '' $cb ORDER BY project_name");
+        $projects->execute(array_filter([$cbParam]));
         $projects = $projects->fetchAll(PDO::FETCH_COLUMN);
 
-        $statuses = $pdo->prepare("SELECT DISTINCT status FROM sites WHERE created_by = ? AND status IS NOT NULL AND status != '' ORDER BY status");
-        $statuses->execute([$personnelId]);
+        $statuses = $pdo->prepare("SELECT DISTINCT status FROM sites WHERE status IS NOT NULL AND status != '' $cb ORDER BY status");
+        $statuses->execute(array_filter([$cbParam]));
         $statuses = $statuses->fetchAll(PDO::FETCH_COLUMN);
 
-        $provinces = $pdo->prepare("SELECT DISTINCT province FROM sites WHERE created_by = ? AND province IS NOT NULL AND province != '' ORDER BY province");
-        $provinces->execute([$personnelId]);
+        $provinces = $pdo->prepare("SELECT DISTINCT province FROM sites WHERE province IS NOT NULL AND province != '' $cb ORDER BY province");
+        $provinces->execute(array_filter([$cbParam]));
         $provinces = $provinces->fetchAll(PDO::FETCH_COLUMN);
 
-        $municipalities = $pdo->prepare("SELECT DISTINCT municipality FROM sites WHERE created_by = ? AND municipality IS NOT NULL AND municipality != '' ORDER BY municipality");
-        $municipalities->execute([$personnelId]);
+        $municipalities = $pdo->prepare("SELECT DISTINCT municipality FROM sites WHERE municipality IS NOT NULL AND municipality != '' $cb ORDER BY municipality");
+        $municipalities->execute(array_filter([$cbParam]));
         $municipalities = $municipalities->fetchAll(PDO::FETCH_COLUMN);
 
-        $isps = $pdo->prepare("SELECT DISTINCT isp FROM sites WHERE created_by = ? AND isp IS NOT NULL AND isp != '' ORDER BY isp");
-        $isps->execute([$personnelId]);
+        $isps = $pdo->prepare("SELECT DISTINCT isp FROM sites WHERE isp IS NOT NULL AND isp != '' $cb ORDER BY isp");
+        $isps->execute(array_filter([$cbParam]));
         $isps = $isps->fetchAll(PDO::FETCH_COLUMN);
 
         echo json_encode([
@@ -84,8 +89,14 @@ if ($action == 'search_sites') {
     $offset = ($page - 1) * $limit;
 
     try {
-        $conditions = ["s.created_by = ?"];
-        $params = [$personnelId];
+        $conditions = [];
+        $params = [];
+
+        // Privileged roles see all sites; regular users see only their own
+        if (!$isPrivileged) {
+            $conditions[] = "s.created_by = ?";
+            $params[] = $personnelId;
+        }
 
         if (!empty($query)) {
             $conditions[] = "(s.site_name LIKE ? OR s.project_name LIKE ? OR s.location_name LIKE ?)";
@@ -177,9 +188,11 @@ if ($action == 'create_tickets') {
         $createdTickets = [];
 
         foreach ($siteIdArray as $siteId) {
-            // Verify site ownership
-            $chk = $pdo->prepare("SELECT id FROM sites WHERE id = ? AND created_by = ?");
-            $chk->execute([$siteId, $personnelId]);
+            // Verify site ownership (skipped for privileged)
+            $sql = "SELECT id FROM sites WHERE id = ? " . ($isPrivileged ? "" : "AND created_by = ?");
+            $params = $isPrivileged ? [$siteId] : [$siteId, $personnelId];
+            $chk = $pdo->prepare($sql);
+            $chk->execute($params);
             if (!$chk->fetch()) {
                 $skippedCount++;
                 continue;

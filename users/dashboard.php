@@ -38,6 +38,16 @@ $personnelId = $user['personnel_id'];
 $logger = new Logger($pdo);
 autoCloseResolvedTickets($pdo, $logger);
 
+// Get user role for data visibility
+$roleStmt = $pdo->prepare("SELECT role FROM users WHERE id = ?");
+$roleStmt->execute([$_SESSION['user_id']]);
+$userRole = $roleStmt->fetchColumn() ?? 'user';
+$isPrivileged = in_array($userRole, ['admin', 'manager', 'operator']);
+
+// Build ownership filter
+$ownFilter = $isPrivileged ? '1=1' : 't.created_by = ?';
+$ownParams = $isPrivileged ? [] : [$personnelId];
+
 // Fetch personal ticket stats (with date filter)
 $stmt = $pdo->prepare("
     SELECT
@@ -48,9 +58,9 @@ $stmt = $pdo->prepare("
         SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) as closed_count,
         SUM(CASE WHEN (status='OPEN' OR status='IN_PROGRESS')
              AND (duration >= 4320 OR (duration IS NULL AND DATEDIFF(NOW(), created_at) >= 3)) THEN 1 ELSE 0 END) as aging_count
-    FROM tickets t WHERE t.created_by = ? {$dateFilterSql}
+    FROM tickets t WHERE {$ownFilter} {$dateFilterSql}
 ");
-$statsParams = array_merge([$personnelId], $dateFilterParams);
+$statsParams = array_merge($ownParams, $dateFilterParams);
 $stmt->execute($statsParams);
 $stats = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -60,11 +70,11 @@ $stmt = $pdo->prepare("
            s.site_name
     FROM tickets t
     LEFT JOIN sites s ON t.site_id = s.id
-    WHERE t.created_by = ? {$dateFilterSql}
+    WHERE {$ownFilter} {$dateFilterSql}
     ORDER BY t.created_at DESC
     LIMIT 10
 ");
-$recentParams = array_merge([$personnelId], $dateFilterParams);
+$recentParams = array_merge($ownParams, $dateFilterParams);
 $stmt->execute($recentParams);
 $recentTickets = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -104,6 +114,8 @@ $activePage = 'dashboard';
                         <button type="button" class="btn btn-outline-info" onclick="setDateRange('last30days')">30D</button>
                         <button type="button" class="btn btn-outline-info" onclick="setDateRange('thisMonth')">This Month</button>
                         <button type="button" class="btn btn-outline-info" onclick="setDateRange('lastMonth')">Last Month</button>
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('thisQuarter')">This Quarter</button>
+                        <button type="button" class="btn btn-outline-info" onclick="setDateRange('thisYear')">This Year</button>
                     </div>
                 </div>
             </form>
@@ -282,6 +294,15 @@ function setDateRange(preset) {
             const lm = new Date(today.getFullYear(), today.getMonth() - 1, 1);
             from = fmt(lm);
             to = fmt(new Date(today.getFullYear(), today.getMonth(), 0));
+            break;
+        case 'thisQuarter':
+            const q = Math.floor(today.getMonth() / 3);
+            from = fmt(new Date(today.getFullYear(), q * 3, 1));
+            to = fmt(today);
+            break;
+        case 'thisYear':
+            from = fmt(new Date(today.getFullYear(), 0, 1));
+            to = fmt(today);
             break;
     }
     const params = new URLSearchParams();

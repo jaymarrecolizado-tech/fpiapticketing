@@ -6,8 +6,13 @@ require '../notif/notification.php';
 require '../lib/Logger.php';
 require '../lib/AutoClose.php';
 require_once '../lib/TicketHistory.php';
+require '../lib/PermissionManager.php';
 
-requireAdmin();
+requireLogin();
+if (!hasPermission('tickets.view')) {
+    header("Location: ../users/dashboard.php");
+    exit;
+}
 
 // Auto-close resolved tickets older than 7 days
 $logger = new Logger($pdo);
@@ -248,6 +253,10 @@ if ($action === 'get_ticket') {
 
 // Update ticket (editing) - allow setting status and notes
 if ($action === 'update_ticket') {
+  if (!hasPermission('tickets.edit')) {
+    echo json_encode(['success' => false, 'message' => 'Permission denied: tickets.edit required']);
+    exit;
+  }
   // ===== CSRF Validation =====
   $csrf_token = $_POST['csrf_token'] ?? '';
   if (!validateCSRFToken($csrf_token)) {
@@ -313,6 +322,233 @@ if ($action === 'update_ticket') {
     echo json_encode(['success' => true, 'message' => 'Ticket updated successfully']);
   } catch (Exception $e) {
     echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+  }
+  exit;
+}
+
+// Bulk status change
+if ($action === 'bulk_status') {
+  if (!hasPermission('tickets.edit')) {
+    echo json_encode(['success' => false, 'message' => 'Permission denied: tickets.edit required']); exit;
+  }
+  $csrf_token = $_POST['csrf_token'] ?? '';
+  if (!validateCSRFToken($csrf_token)) {
+    echo json_encode(['success' => false, 'message' => 'Invalid security token']); exit;
+  }
+
+  $ticketIds = $_POST['ticket_ids'] ?? [];
+  $newStatus = Sanitizer::normalize($_POST['new_status'] ?? '');
+  $validStatuses = ['OPEN', 'IN_PROGRESS', 'RESOLVED', 'CLOSED'];
+
+  if (empty($ticketIds) || !is_array($ticketIds)) {
+    echo json_encode(['success' => false, 'message' => 'No tickets selected']); exit;
+  }
+  if (!Validator::inList($newStatus, $validStatuses)) {
+    echo json_encode(['success' => false, 'message' => 'Invalid status']); exit;
+  }
+
+  try {
+    $placeholders = implode(',', array_fill(0, count($ticketIds), '?'));
+    $params = array_merge([$newStatus], $ticketIds);
+
+    if (in_array($newStatus, ['CLOSED', 'RESOLVED'])) {
+      $sql = "UPDATE tickets SET status = ?, solved_date = NOW(), duration = TIMESTAMPDIFF(MINUTE, created_at, NOW()), updated_at = NOW() WHERE id IN ($placeholders)";
+    } else {
+      $sql = "UPDATE tickets SET status = ?, solved_date = NULL, updated_at = NOW() WHERE id IN ($placeholders)";
+    }
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $count = $stmt->rowCount();
+
+    // Log history for each changed ticket
+    $history = new TicketHistory($pdo);
+    foreach ($ticketIds as $tid) {
+      $history->logChange(intval($tid), $_SESSION['user_id'], 'bulk_status_changed', 'status', null, $newStatus);
+    }
+
+    echo json_encode(['success' => true, 'message' => "$count ticket(s) updated to $newStatus"]);
+  } catch (PDOException $e) {
+    echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+  }
+  exit;
+}
+
+// Bulk assignment
+if ($action === 'bulk_assign') {
+  if (!hasPermission('tickets.edit')) {
+    echo json_encode(['success' => false, 'message' => 'Permission denied: tickets.edit required']); exit;
+  }
+  $csrf_token = $_POST['csrf_token'] ?? '';
+  if (!validateCSRFToken($csrf_token)) {
+    echo json_encode(['success' => false, 'message' => 'Invalid security token']); exit;
+  }
+
+  $ticketIds = $_POST['ticket_ids'] ?? [];
+  $assignedTo = !empty($_POST['assigned_to']) ? intval($_POST['assigned_to']) : null;
+
+  if (empty($ticketIds) || !is_array($ticketIds)) {
+    echo json_encode(['success' => false, 'message' => 'No tickets selected']); exit;
+  }
+
+  try {
+    $placeholders = implode(',', array_fill(0, count($ticketIds), '?'));
+    $stmt = $pdo->prepare("UPDATE tickets SET assigned_to = ?, updated_at = NOW() WHERE id IN ($placeholders)");
+    $stmt->execute(array_merge([$assignedTo], $ticketIds));
+    $count = $stmt->rowCount();
+
+    $history = new TicketHistory($pdo);
+    foreach ($ticketIds as $tid) {
+      $history->logChange(intval($tid), $_SESSION['user_id'], 'bulk_assigned', 'assigned_to', null, $assignedTo ?: 'Unassigned');
+    }
+
+    echo json_encode(['success' => true, 'message' => "$count ticket(s) assigned"]);
+  } catch (PDOException $e) {
+    echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+  }
+  exit;
+}
+
+// CSV export from ticket list
+if ($action === 'export_csv') {
+  if (!hasPermission('reports.export')) {
+    echo json_encode(['error' => 'Permission denied: reports.export required']); exit;
+  }
+
+  // Reuse the same query logic from get_tickets but without LIMIT
+  $search = trim($_POST['search'] ?? '');
+  $statusArray = $_POST['status'] ?? [];
+  if (!is_array($statusArray)) { $statusArray = $statusArray !== '' ? [$statusArray] : []; }
+  $siteIdArray = $_POST['site_id'] ?? [];
+  if (!is_array($siteIdArray)) { $siteIdArray = array_map('intval', $siteIdArray); }
+  $createdByArray = $_POST['created_by'] ?? [];
+  if (!is_array($createdByArray)) { $createdByArray = array_map('intval', $createdByArray); }
+  $ispArray = $_POST['isp'] ?? [];
+  if (!is_array($ispArray)) { $ispArray = $ispArray !== '' ? [$ispArray] : []; }
+  $projectArray = $_POST['project'] ?? [];
+  if (!is_array($projectArray)) { $projectArray = $projectArray !== '' ? [$projectArray] : []; }
+  $provinceArray = $_POST['province'] ?? [];
+  if (!is_array($provinceArray)) { $provinceArray = $provinceArray !== '' ? [$provinceArray] : []; }
+  $municipalityArray = $_POST['municipality'] ?? [];
+  if (!is_array($municipalityArray)) { $municipalityArray = $municipalityArray !== '' ? [$municipalityArray] : []; }
+  $dateFrom = trim($_POST['date_from'] ?? '');
+  $dateTo = trim($_POST['date_to'] ?? '');
+
+  $params = [];
+  $conditions = [];
+  if (!empty($statusArray)) { $ph = implode(',', array_fill(0, count($statusArray), '?')); $conditions[] = "t.status IN ($ph)"; foreach ($statusArray as $v) $params[] = trim($v); }
+  if (!empty($siteIdArray)) { $ph = implode(',', array_fill(0, count($siteIdArray), '?')); $conditions[] = "t.site_id IN ($ph)"; foreach ($siteIdArray as $v) $params[] = $v; }
+  if ($search !== '') { $conditions[] = '(t.ticket_number LIKE ? OR t.subject LIKE ?)'; $params[] = "%$search%"; $params[] = "%$search%"; }
+  if (!empty($createdByArray)) { $ph = implode(',', array_fill(0, count($createdByArray), '?')); $conditions[] = "t.created_by IN ($ph)"; foreach ($createdByArray as $v) $params[] = $v; }
+  if ($dateFrom !== '') { $conditions[] = 'DATE(t.created_at) >= ?'; $params[] = $dateFrom; }
+  if ($dateTo !== '') { $conditions[] = 'DATE(t.created_at) <= ?'; $params[] = $dateTo; }
+  if (!empty($ispArray)) { $ph = implode(',', array_fill(0, count($ispArray), '?')); $conditions[] = "s.isp IN ($ph)"; foreach ($ispArray as $v) $params[] = trim($v); }
+  if (!empty($projectArray)) { $ph = implode(',', array_fill(0, count($projectArray), '?')); $conditions[] = "s.project_name IN ($ph)"; foreach ($projectArray as $v) $params[] = trim($v); }
+  if (!empty($provinceArray)) { $ph = implode(',', array_fill(0, count($provinceArray), '?')); $conditions[] = "s.province IN ($ph)"; foreach ($provinceArray as $v) $params[] = trim($v); }
+  if (!empty($municipalityArray)) { $ph = implode(',', array_fill(0, count($municipalityArray), '?')); $conditions[] = "s.municipality IN ($ph)"; foreach ($municipalityArray as $v) $params[] = trim($v); }
+
+  $where = !empty($conditions) ? 'WHERE ' . implode(' AND ', $conditions) : '';
+
+  try {
+    $sql = "SELECT t.ticket_number, t.subject, t.status, t.priority, t.category, t.notes,
+                   s.site_name, s.isp, s.province, s.municipality, s.project_name,
+                   p.fullname AS created_by_name, t.created_at, t.solved_date, t.duration,
+                   t.due_date
+            FROM tickets t
+            LEFT JOIN sites s ON t.site_id = s.id
+            LEFT JOIN personnels p ON t.created_by = p.id
+            $where
+            ORDER BY t.created_at DESC";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="tickets_export_' . date('Y-m-d_H-i-s') . '.csv"');
+    $output = fopen('php://output', 'w');
+    if (!empty($rows)) {
+      fputcsv($output, array_keys($rows[0]));
+      foreach ($rows as $row) {
+        $row['duration'] = round($row['duration'] / 1440, 1) . ' days';
+        fputcsv($output, $row);
+      }
+    }
+    fclose($output);
+  } catch (PDOException $e) {
+    echo json_encode(['error' => $e->getMessage()]);
+  }
+  exit;
+}
+
+// PDF export from ticket list
+if ($action === 'export_pdf') {
+  if (!hasPermission('reports.export')) {
+    echo json_encode(['error' => 'Permission denied: reports.export required']); exit;
+  }
+
+  require_once __DIR__ . '/../lib/PdfGenerator.php';
+
+  // Same query as export_csv
+  $search = trim($_POST['search'] ?? '');
+  $statusArray = $_POST['status'] ?? [];
+  if (!is_array($statusArray)) { $statusArray = $statusArray !== '' ? [$statusArray] : []; }
+  $siteIdArray = $_POST['site_id'] ?? [];
+  if (!is_array($siteIdArray)) { $siteIdArray = array_map('intval', $siteIdArray); }
+  $createdByArray = $_POST['created_by'] ?? [];
+  if (!is_array($createdByArray)) { $createdByArray = array_map('intval', $createdByArray); }
+  $ispArray = $_POST['isp'] ?? [];
+  if (!is_array($ispArray)) { $ispArray = $ispArray !== '' ? [$ispArray] : []; }
+  $projectArray = $_POST['project'] ?? [];
+  if (!is_array($projectArray)) { $projectArray = $projectArray !== '' ? [$projectArray] : []; }
+  $provinceArray = $_POST['province'] ?? [];
+  if (!is_array($provinceArray)) { $provinceArray = $provinceArray !== '' ? [$provinceArray] : []; }
+  $municipalityArray = $_POST['municipality'] ?? [];
+  if (!is_array($municipalityArray)) { $municipalityArray = $municipalityArray !== '' ? [$municipalityArray] : []; }
+  $dateFrom = trim($_POST['date_from'] ?? '');
+  $dateTo = trim($_POST['date_to'] ?? '');
+
+  $params = [];
+  $conditions = [];
+  if (!empty($statusArray)) { $ph = implode(',', array_fill(0, count($statusArray), '?')); $conditions[] = "t.status IN ($ph)"; foreach ($statusArray as $v) $params[] = trim($v); }
+  if (!empty($siteIdArray)) { $ph = implode(',', array_fill(0, count($siteIdArray), '?')); $conditions[] = "t.site_id IN ($ph)"; foreach ($siteIdArray as $v) $params[] = $v; }
+  if ($search !== '') { $conditions[] = '(t.ticket_number LIKE ? OR t.subject LIKE ?)'; $params[] = "%$search%"; $params[] = "%$search%"; }
+  if (!empty($createdByArray)) { $ph = implode(',', array_fill(0, count($createdByArray), '?')); $conditions[] = "t.created_by IN ($ph)"; foreach ($createdByArray as $v) $params[] = $v; }
+  if ($dateFrom !== '') { $conditions[] = 'DATE(t.created_at) >= ?'; $params[] = $dateFrom; }
+  if ($dateTo !== '') { $conditions[] = 'DATE(t.created_at) <= ?'; $params[] = $dateTo; }
+  if (!empty($ispArray)) { $ph = implode(',', array_fill(0, count($ispArray), '?')); $conditions[] = "s.isp IN ($ph)"; foreach ($ispArray as $v) $params[] = trim($v); }
+  if (!empty($projectArray)) { $ph = implode(',', array_fill(0, count($projectArray), '?')); $conditions[] = "s.project_name IN ($ph)"; foreach ($projectArray as $v) $params[] = trim($v); }
+  if (!empty($provinceArray)) { $ph = implode(',', array_fill(0, count($provinceArray), '?')); $conditions[] = "s.province IN ($ph)"; foreach ($provinceArray as $v) $params[] = trim($v); }
+  if (!empty($municipalityArray)) { $ph = implode(',', array_fill(0, count($municipalityArray), '?')); $conditions[] = "s.municipality IN ($ph)"; foreach ($municipalityArray as $v) $params[] = trim($v); }
+
+  $where = !empty($conditions) ? 'WHERE ' . implode(' AND ', $conditions) : '';
+
+  try {
+    $sql = "SELECT t.ticket_number, t.subject, t.status, t.priority, t.category, t.notes,
+                   s.site_name, s.isp, s.province, s.municipality, s.project_name,
+                   p.fullname AS created_by_name, t.created_at, t.solved_date, t.duration,
+                   t.due_date
+            FROM tickets t
+            LEFT JOIN sites s ON t.site_id = s.id
+            LEFT JOIN personnels p ON t.created_by = p.id
+            $where
+            ORDER BY t.created_at DESC";
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    PdfGenerator::generateTicketList($rows, 'ticket_list_' . date('Y-m-d_H-i-s'));
+  } catch (PDOException $e) {
+    echo json_encode(['error' => $e->getMessage()]);
+  }
+  exit;
+}
+
+// Get assignable personnel list for bulk assign dropdown
+if ($action === 'get_personnel') {
+  try {
+    $stmt = $pdo->query("SELECT p.id, p.fullname FROM personnels p ORDER BY p.fullname");
+    echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+  } catch (PDOException $e) {
+    echo json_encode(['error' => $e->getMessage()]);
   }
   exit;
 }
@@ -676,11 +912,44 @@ if ($action === 'update_ticket') {
         </div>
       </div>
 
+      <!-- Bulk Action Toolbar (hidden by default) -->
+      <div id="bulkToolbar" class="card border-primary shadow-sm mb-3" style="display: none; background: linear-gradient(135deg, #e8f0fe 0%, #ffffff 100%); border-radius: 10px;">
+        <div class="card-body py-2 px-3 d-flex align-items-center gap-3 flex-wrap">
+          <span class="fw-bold text-primary"><i class="bi bi-check2-square me-1"></i><span id="bulkCount">0</span> selected</span>
+          <div class="vr d-none d-md-block"></div>
+          <div class="d-flex align-items-center gap-2">
+            <select id="bulkStatusSelect" class="form-select form-select-sm" style="width: auto;">
+              <option value="">Change Status to...</option>
+              <option value="OPEN">Open</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="RESOLVED">Resolved</option>
+              <option value="CLOSED">Closed</option>
+            </select>
+            <button id="bulkStatusBtn" class="btn btn-sm btn-primary" title="Apply status change"><i class="bi bi-check-lg"></i> Apply</button>
+          </div>
+          <div class="d-flex align-items-center gap-2">
+            <select id="bulkAssignSelect" class="form-select form-select-sm" style="width: auto;">
+              <option value="">Assign to...</option>
+            </select>
+            <button id="bulkAssignBtn" class="btn btn-sm btn-info text-white" title="Apply assignment"><i class="bi bi-person-check"></i> Assign</button>
+          </div>
+          <div class="vr d-none d-md-block"></div>
+          <button id="bulkDeselectAll" class="btn btn-sm btn-outline-secondary" title="Clear selection"><i class="bi bi-x-lg"></i> Clear</button>
+        </div>
+      </div>
+
+      <!-- Export Buttons -->
+      <div class="d-flex gap-2 mb-3 justify-content-end">
+        <button id="exportCsvBtn" class="btn btn-sm btn-outline-success" title="Export filtered tickets to CSV"><i class="bi bi-filetype-csv me-1"></i> Export CSV</button>
+        <button id="exportPdfBtn" class="btn btn-sm btn-outline-danger" title="Export filtered tickets to PDF"><i class="bi bi-filetype-pdf me-1"></i> Download PDF</button>
+      </div>
+
       <!-- Tickets Table -->
       <div class="table-responsive">
         <table class="table table-bordered table-hover shadow-sm">
           <thead class="table-dark text-center">
             <tr>
+              <th style="width: 40px;"><input type="checkbox" id="selectAllCheck" class="form-check-input" title="Select all tickets on this page"></th>
               <th class="sortable" data-sort="ticket_number">Ticket # <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="site_name">Site <span class="sort-indicator"></span></th>
               <th class="sortable" data-sort="isp">ISP <span class="sort-indicator"></span></th>
@@ -694,7 +963,7 @@ if ($action === 'update_ticket') {
             </tr>
           </thead>
           <tbody id="ticketsTable">
-            <tr><td colspan="9" class="text-center py-4 text-muted"><i class="bi bi-hourglass-bottom"></i> Loading tickets...</td></tr>
+            <tr><td colspan="11" class="text-center py-4 text-muted"><i class="bi bi-hourglass-bottom"></i> Loading tickets...</td></tr>
           </tbody>
         </table>
       </div>
@@ -1531,11 +1800,12 @@ if ($action === 'update_ticket') {
 
   function renderTable(rows){
     const tb = document.getElementById('ticketsTable');
-    if(!rows.length){ tb.innerHTML = '<tr><td colspan="10" class="text-center py-4 text-muted"><i class="bi bi-inbox"></i> No tickets found</td></tr>'; return; }
+    if(!rows.length){ tb.innerHTML = '<tr><td colspan="11" class="text-center py-4 text-muted"><i class="bi bi-inbox"></i> No tickets found</td></tr>'; return; }
     tb.innerHTML = rows.map(r=>{
       const statusBg = statusClass(r.status);
       const priorityBg = priorityClass(r.priority);
       return `<tr class="align-middle" data-ticket-id="${r.id}">
+        <td class="text-center"><input type="checkbox" class="form-check-input ticket-check" value="${r.id}" title="Select ticket ${escapeHtml(r.ticket_number)}"></td>
         <td><a href="detail_ticket.php?id=${r.id}" class="text-primary fw-bold text-decoration-none">${escapeHtml(r.ticket_number)}</a></td>
         <td>${escapeHtml(r.site_name || 'N/A')}</td>
         <td>${escapeHtml(r.isp || 'N/A')}</td>
@@ -1617,6 +1887,190 @@ if ($action === 'update_ticket') {
       const column = this.getAttribute('data-sort');
       handleSort(column);
     });
+  });
+
+  // ── Bulk Selection & Actions ──
+  const selectAllCheck = document.getElementById('selectAllCheck');
+  const bulkToolbar = document.getElementById('bulkToolbar');
+  const bulkCountEl = document.getElementById('bulkCount');
+  const bulkStatusSelect = document.getElementById('bulkStatusSelect');
+  const bulkAssignSelect = document.getElementById('bulkAssignSelect');
+  const bulkStatusBtn = document.getElementById('bulkStatusBtn');
+  const bulkAssignBtn = document.getElementById('bulkAssignBtn');
+  const bulkDeselectAll = document.getElementById('bulkDeselectAll');
+  const csrfToken = '<?php echo htmlspecialchars(generateCSRFToken()); ?>';
+
+  function showToast(message, type) {
+    const container = document.getElementById('alertContainer');
+    if (!container) { alert(message); return; }
+    const icon = type === 'success' ? 'check-circle-fill' : 'exclamation-triangle-fill';
+    const alertDiv = document.createElement('div');
+    alertDiv.className = `alert alert-${type === 'success' ? 'success' : 'danger'} alert-dismissible fade show`;
+    alertDiv.innerHTML = `<i class="bi bi-${icon} me-2"></i>${message}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>`;
+    container.prepend(alertDiv);
+    setTimeout(() => alertDiv.remove(), 5000);
+  }
+
+  function getSelectedIds() {
+    return [...document.querySelectorAll('.ticket-check:checked')].map(cb => cb.value);
+  }
+  function updateBulkToolbar() {
+    const count = getSelectedIds().length;
+    bulkCountEl.textContent = count;
+    bulkToolbar.style.display = count > 0 ? 'block' : 'none';
+  }
+
+  selectAllCheck.addEventListener('change', function() {
+    document.querySelectorAll('.ticket-check').forEach(cb => { cb.checked = selectAllCheck.checked; });
+    updateBulkToolbar();
+  });
+  document.getElementById('ticketsTable').addEventListener('change', function(e) {
+    if (e.target.classList.contains('ticket-check')) {
+      const total = document.querySelectorAll('.ticket-check').length;
+      const checked = document.querySelectorAll('.ticket-check:checked').length;
+      selectAllCheck.checked = total > 0 && checked === total;
+      selectAllCheck.indeterminate = checked > 0 && checked < total;
+      updateBulkToolbar();
+    }
+  });
+  bulkDeselectAll.addEventListener('click', function() {
+    document.querySelectorAll('.ticket-check').forEach(cb => { cb.checked = false; });
+    selectAllCheck.checked = false;
+    selectAllCheck.indeterminate = false;
+    updateBulkToolbar();
+  });
+
+  bulkStatusBtn.addEventListener('click', function() {
+    const ids = getSelectedIds();
+    const newStatus = bulkStatusSelect.value;
+    if (!ids.length) return alert('No tickets selected.');
+    if (!newStatus) return alert('Please select a status.');
+    if (!confirm(`Change ${ids.length} ticket(s) to "${newStatus}"?`)) return;
+
+    const fd = new FormData();
+    fd.append('action', 'bulk_status');
+    fd.append('csrf_token', csrfToken);
+    fd.append('new_status', newStatus);
+    ids.forEach(id => fd.append('ticket_ids[]', id));
+
+    fetch('viewtickets.php', { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          showToast(data.message, 'success');
+          bulkStatusSelect.value = '';
+          loadTickets();
+        } else {
+          showToast(data.message || 'Error', 'danger');
+        }
+      })
+      .catch(err => showToast('Request failed: ' + err.message, 'danger'));
+  });
+
+  bulkAssignBtn.addEventListener('click', function() {
+    const ids = getSelectedIds();
+    const assignedTo = bulkAssignSelect.value;
+    if (!ids.length) return alert('No tickets selected.');
+    if (!assignedTo) return alert('Please select a person to assign.');
+    if (!confirm(`Assign ${ids.length} ticket(s) to selected person?`)) return;
+
+    const fd = new FormData();
+    fd.append('action', 'bulk_assign');
+    fd.append('csrf_token', csrfToken);
+    fd.append('assigned_to', assignedTo);
+    ids.forEach(id => fd.append('ticket_ids[]', id));
+
+    fetch('viewtickets.php', { method: 'POST', body: fd })
+      .then(r => r.json())
+      .then(data => {
+        if (data.success) {
+          showToast(data.message, 'success');
+          loadTickets();
+        } else {
+          showToast(data.message || 'Error', 'danger');
+        }
+      })
+      .catch(err => showToast('Request failed: ' + err.message, 'danger'));
+  });
+
+  // Load personnel list for bulk assign dropdown
+  (function loadPersonnelForBulk() {
+    fetch('viewtickets.php', { method: 'POST', headers: {'Content-Type': 'application/x-www-form-urlencoded'}, body: 'action=get_personnel' })
+      .then(r => r.json())
+      .then(data => {
+        if (Array.isArray(data)) {
+          data.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.textContent = p.fullname;
+            bulkAssignSelect.appendChild(opt);
+          });
+        }
+      })
+      .catch(() => {});
+  })();
+
+  // ── CSV & PDF Export ──
+  function buildFilterPayload(action) {
+    const fd = new FormData();
+    fd.append('action', action);
+    const search = document.getElementById('filterSearch')?.value || '';
+    fd.append('search', search);
+    const dateFrom = document.getElementById('filterDateFrom')?.value || '';
+    const dateTo = document.getElementById('filterDateTo')?.value || '';
+    fd.append('date_from', dateFrom);
+    fd.append('date_to', dateTo);
+    // Get selected values from each filter dropdown
+    ['status', 'site', 'createdBy', 'isp', 'project', 'province', 'municipality'].forEach(type => {
+      const containerId = type + 'Options';
+      const container = document.getElementById(containerId);
+      if (!container) return;
+      const param = type === 'createdBy' ? 'created_by' : type;
+      container.querySelectorAll('.form-check-input:checked').forEach(cb => {
+        fd.append(param + '[]', cb.value);
+      });
+    });
+    return fd;
+  }
+
+  document.getElementById('exportCsvBtn').addEventListener('click', function() {
+    const fd = buildFilterPayload('export_csv');
+    fetch('viewtickets.php', { method: 'POST', body: fd })
+      .then(r => {
+        const disp = r.headers.get('Content-Disposition');
+        if (disp) {
+          return r.blob().then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = disp.match(/filename="?(.+?)"?$/)?.[1] || 'tickets_export.csv';
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+        }
+        return r.json().then(data => { if (data.error) showToast(data.error, 'danger'); });
+      })
+      .catch(err => showToast('Export failed: ' + err.message, 'danger'));
+  });
+
+  document.getElementById('exportPdfBtn').addEventListener('click', function() {
+    const fd = buildFilterPayload('export_pdf');
+    fetch('viewtickets.php', { method: 'POST', body: fd })
+      .then(r => {
+        const ct = r.headers.get('Content-Type');
+        if (ct && ct.includes('application/pdf')) {
+          return r.blob().then(blob => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'ticket_list_' + new Date().toISOString().slice(0,10) + '.pdf';
+            a.click();
+            URL.revokeObjectURL(url);
+          });
+        }
+        return r.json().then(data => { if (data.error) showToast(data.error, 'danger'); });
+      })
+      .catch(err => showToast('Export failed: ' + err.message, 'danger'));
   });
 
   </script>

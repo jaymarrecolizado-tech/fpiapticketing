@@ -1,6 +1,6 @@
 <?php
 /**
- * Logout Handler - eJobOrder System
+ * Logout Handler - FPIAP-SMARTs
  * Securely destroys session and redirects to login
  */
 

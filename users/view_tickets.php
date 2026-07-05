@@ -7,8 +7,8 @@ require '../notif/notification.php';
 
 requireLogin();
 
-// Get current user's personnel_id
-$stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
+// Get current user's personnel_id and role
+$stmt = $pdo->prepare("SELECT personnel_id, role FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 if (!$user) {
@@ -16,6 +16,8 @@ if (!$user) {
     exit;
 }
 $personnelId = $user['personnel_id'];
+$userRole = $user['role'] ?? 'user';
+$isPrivileged = in_array($userRole, ['admin', 'manager', 'operator']);
 
 $action = $_POST['action'] ?? '';
 
@@ -35,8 +37,14 @@ if ($action === 'get_tickets') {
     if (!in_array($sortOrder, ['ASC', 'DESC'])) $sortOrder = 'DESC';
 
     try {
-        $conditions = ["t.created_by = ?"];
-        $params = [$personnelId];
+        $conditions = [];
+        $params = [];
+
+        // Privileged roles see all tickets; regular users see only their own
+        if (!$isPrivileged) {
+            $conditions[] = "t.created_by = ?";
+            $params[] = $personnelId;
+        }
 
         if (!empty($search)) {
             $conditions[] = "(t.ticket_number LIKE ? OR t.subject LIKE ? OR s.site_name LIKE ?)";
@@ -84,8 +92,13 @@ if ($action === 'get_tickets') {
 if ($action === 'get_filters') {
     header('Content-Type: application/json');
     try {
-        $statuses = $pdo->prepare("SELECT DISTINCT status FROM tickets WHERE created_by = ? AND status IS NOT NULL ORDER BY status");
-        $statuses->execute([$personnelId]);
+        if ($isPrivileged) {
+            $statuses = $pdo->prepare("SELECT DISTINCT status FROM tickets WHERE status IS NOT NULL ORDER BY status");
+            $statuses->execute();
+        } else {
+            $statuses = $pdo->prepare("SELECT DISTINCT status FROM tickets WHERE created_by = ? AND status IS NOT NULL ORDER BY status");
+            $statuses->execute([$personnelId]);
+        }
         $statuses = $statuses->fetchAll(PDO::FETCH_COLUMN);
 
         echo json_encode(['statuses' => $statuses]);

@@ -18,16 +18,9 @@ class BackupManager {
         $filename = 'db_backup_' . date('Y-m-d_H-i-s') . '.sql';
         $filepath = $this->backupPath . $filename;
 
-        // Get database credentials from config
-        $dbConfig = require '../config/db.php';
-        $host = $dbConfig['host'] ?? 'localhost';
-        $user = $dbConfig['username'] ?? 'root';
-        $pass = $dbConfig['password'] ?? '';
-        $db = $dbConfig['database'] ?? 'cagayanregionsite_db';
-
-        // Use full path to mysqldump for Windows
-        $mysqldumpPath = 'C:\\xampp\\mysql\\bin\\mysqldump.exe';
-        $command = "\"$mysqldumpPath\" --host=$host --user=$user --password=\"$pass\" $db > \"$filepath\"";
+        $creds = $this->getCredentials();
+        $mysqldumpPath = $this->getMysqlBinPath('mysqldump');
+        $command = "\"$mysqldumpPath\" --host={$creds['host']} --user={$creds['user']} --password=\"{$creds['pass']}\" {$creds['db']} > \"$filepath\"";
 
         exec($command, $output, $returnCode);
 
@@ -249,15 +242,9 @@ class BackupManager {
             return ['success' => false, 'error' => 'Backup file not found'];
         }
 
-        $dbConfig = require '../config/db.php';
-        $host = $dbConfig['host'] ?? 'localhost';
-        $user = $dbConfig['username'] ?? 'root';
-        $pass = $dbConfig['password'] ?? '';
-        $db = $dbConfig['database'] ?? 'cagayanregionsite_db';
-
-        // Use full path to mysql for Windows
-        $mysqlPath = 'C:\\xampp\\mysql\\bin\\mysql.exe';
-        $command = "\"$mysqlPath\" --host=$host --user=$user --password=\"$pass\" $db < \"$backupFile\"";
+        $creds = $this->getCredentials();
+        $mysqlPath = $this->getMysqlBinPath('mysql');
+        $command = "\"$mysqlPath\" --host={$creds['host']} --user={$creds['user']} --password=\"{$creds['pass']}\" {$creds['db']} < \"$backupFile\"";
 
         exec($command, $output, $returnCode);
 
@@ -266,6 +253,39 @@ class BackupManager {
             'output' => $output,
             'return_code' => $returnCode
         ];
+    }
+
+    /**
+     * Extract database credentials from DB constants defined in config/db.php.
+     */
+    private function getCredentials() {
+        return [
+            'host' => defined('DB_HOST') ? DB_HOST : 'localhost',
+            'user' => defined('DB_USER') ? DB_USER : 'root',
+            'pass' => defined('DB_PASS') ? DB_PASS : '',
+            'db'   => defined('DB_NAME') ? DB_NAME : 'cagayanregionsite_db',
+        ];
+    }
+
+    /**
+     * Detect platform and return the correct path to mysqldump or mysql binary.
+     */
+    private function getMysqlBinPath($binary = 'mysqldump') {
+        if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+            // Windows — try WAMP64 first, then XAMPP
+            $wampPath = "C:\\wamp64\\bin\\mysql\\mysql9.1.0\\bin\\$binary.exe";
+            if (file_exists($wampPath)) {
+                return $wampPath;
+            }
+            $xamppPath = "C:\\xampp\\mysql\\bin\\$binary.exe";
+            if (file_exists($xamppPath)) {
+                return $xamppPath;
+            }
+            // Fallback to PATH
+            return $binary;
+        }
+        // Linux — use system PATH (VPS)
+        return "/usr/bin/$binary";
     }
 }
 ?>

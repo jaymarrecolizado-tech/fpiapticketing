@@ -19,11 +19,7 @@ try {
     require_once '../config/db.php';
     require_once '../notif/notification.php';
 
-    if (!isset($_SESSION['user_id'])) {
-        echo '<li class="dropdown-item text-center text-muted small">Please log in</li>';
-        ob_end_flush();
-        exit;
-    }
+    requireLogin();
 
     $userId = intval($_SESSION['user_id']);
 

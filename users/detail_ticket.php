@@ -12,11 +12,13 @@ if ($id <= 0) {
     exit;
 }
 
-// Get user's personnel_id for ownership check
-$stmt = $pdo->prepare("SELECT personnel_id FROM users WHERE id = ?");
+// Get user's personnel_id and role for ownership check
+$stmt = $pdo->prepare("SELECT personnel_id, role FROM users WHERE id = ?");
 $stmt->execute([$_SESSION['user_id']]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 $personnelId = $user['personnel_id'];
+$userRole = $user['role'] ?? 'user';
+$isPrivileged = in_array($userRole, ['admin', 'manager', 'operator']);
 
 // Handle AJAX comment actions
 $action = $_POST['action'] ?? $_GET['action'] ?? '';
@@ -106,13 +108,15 @@ if ($action === 'get_comments') {
 }
 
 try {
-    $stmt = $pdo->prepare("SELECT t.*, s.site_name, s.isp, s.province, s.municipality, p.fullname AS created_by_name, ap.fullname AS assigned_to_name
-                           FROM tickets t
-                           LEFT JOIN sites s ON t.site_id = s.id
-                           LEFT JOIN personnels p ON t.created_by = p.id
-                           LEFT JOIN personnels ap ON t.assigned_to = ap.id
-                           WHERE t.id = ? AND t.created_by = ?");
-    $stmt->execute([$id, $personnelId]);
+    $sql = "SELECT t.*, s.site_name, s.isp, s.province, s.municipality, p.fullname AS created_by_name, ap.fullname AS assigned_to_name
+                   FROM tickets t
+                   LEFT JOIN sites s ON t.site_id = s.id
+                   LEFT JOIN personnels p ON t.created_by = p.id
+                   LEFT JOIN personnels ap ON t.assigned_to = ap.id
+                   WHERE t.id = ?" . ($isPrivileged ? "" : " AND t.created_by = ?");
+    $params = $isPrivileged ? [$id] : [$id, $personnelId];
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
     $ticket = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$ticket) {
         echo "<p>Ticket not found</p>";
